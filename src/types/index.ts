@@ -118,6 +118,7 @@ export interface PlacedPiece {
   isTrapezoid: boolean;
   isFlipped: boolean; // se o trapézio foi invertido para encaixe complementar
   isRotated?: boolean;
+  rotation?: number; // Ângulo de rotação da peça em graus (0, 45, 90, 135, 180, 270)
   cutIndex: number;
   colorIndex: number;
   spliceInfo?: SpliceInfo;
@@ -179,7 +180,7 @@ export interface CoilCutSuggestion {
 export interface OptimizationSolution {
   id: string;
   title: string;
-  rank: 1 | 2 | 3;
+  rank: 1 | 2 | 3 | 4 | 5;
   priorityMode: PriorityMode;
   score: number;
   yieldPercentage: number;
@@ -193,6 +194,21 @@ export interface OptimizationSolution {
   unplacedPieces: CutPiece[];
   machineAlerts: string[];
   coilCutSuggestions?: CoilCutSuggestion[];
+  primaryWidthMm?: number;
+  totalLengthCutMeters?: number;
+  lateralWasteMm?: number;
+  summaryTag?: string;
+  allTestedWidthsComparison?: {
+    widthMm: number;
+    widthCm: number;
+    feasible: boolean;
+    yieldPercentage: number;
+    metersToUnroll: number;
+    sheetsCount: number;
+    lateralWasteCm: number;
+    piecesPlaced: number;
+    description: string;
+  }[];
 }
 
 export interface CutOrder {

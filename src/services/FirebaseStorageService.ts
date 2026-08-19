@@ -60,6 +60,30 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   return errInfo;
 }
 
+/**
+ * Remove recursivamente todos os campos com valor `undefined` para evitar erros no Firestore setDoc/updateDoc
+ */
+export function cleanForFirestore<T>(data: T): T {
+  if (data === null || data === undefined) {
+    return null as unknown as T;
+  }
+  if (Array.isArray(data)) {
+    return data
+      .filter((item) => item !== undefined)
+      .map((item) => cleanForFirestore(item)) as unknown as T;
+  }
+  if (typeof data === 'object') {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(data as Record<string, any>)) {
+      if (value !== undefined) {
+        cleaned[key] = cleanForFirestore(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return data;
+}
+
 const COLLECTIONS = {
   SHEETS: 'sheets',
   SCRAPS: 'scraps',
@@ -77,7 +101,8 @@ export class FirebaseStorageService {
     try {
       const settingsRef = doc(db, COLLECTIONS.SETTINGS, SETTINGS_DOC_ID);
       const localSettings = StorageService.getSettings();
-      await setDoc(settingsRef, localSettings, { merge: true });
+      const payload = cleanForFirestore(localSettings);
+      await setDoc(settingsRef, payload, { merge: true });
 
       // Limpeza de documentos de exemplo legados do Firestore caso existam
       const legacyIds = [
@@ -142,7 +167,7 @@ export class FirebaseStorageService {
     StorageService.saveSheets([newSheet, ...currentSheets]);
 
     try {
-      await setDoc(doc(db, COLLECTIONS.SHEETS, id), newSheet);
+      await setDoc(doc(db, COLLECTIONS.SHEETS, id), cleanForFirestore(newSheet));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `${COLLECTIONS.SHEETS}/${id}`);
     }
@@ -153,7 +178,7 @@ export class FirebaseStorageService {
   static async updateSheet(sheet: SheetItem): Promise<void> {
     StorageService.updateSheet(sheet);
     try {
-      await setDoc(doc(db, COLLECTIONS.SHEETS, sheet.id), sheet, { merge: true });
+      await setDoc(doc(db, COLLECTIONS.SHEETS, sheet.id), cleanForFirestore(sheet), { merge: true });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `${COLLECTIONS.SHEETS}/${sheet.id}`);
     }
@@ -209,7 +234,7 @@ export class FirebaseStorageService {
     StorageService.saveScraps([newScrap, ...currentScraps]);
 
     try {
-      await setDoc(doc(db, COLLECTIONS.SCRAPS, id), newScrap);
+      await setDoc(doc(db, COLLECTIONS.SCRAPS, id), cleanForFirestore(newScrap));
     } catch (e) {
       handleFirestoreError(e, OperationType.CREATE, `${COLLECTIONS.SCRAPS}/${id}`);
     }
@@ -220,7 +245,7 @@ export class FirebaseStorageService {
   static async updateScrap(scrap: ScrapItem): Promise<void> {
     StorageService.updateScrap(scrap);
     try {
-      await setDoc(doc(db, COLLECTIONS.SCRAPS, scrap.id), scrap, { merge: true });
+      await setDoc(doc(db, COLLECTIONS.SCRAPS, scrap.id), cleanForFirestore(scrap), { merge: true });
     } catch (e) {
       handleFirestoreError(e, OperationType.UPDATE, `${COLLECTIONS.SCRAPS}/${scrap.id}`);
     }
@@ -261,7 +286,7 @@ export class FirebaseStorageService {
     StorageService.saveSettings(settings);
     try {
       const docRef = doc(db, COLLECTIONS.SETTINGS, SETTINGS_DOC_ID);
-      await setDoc(docRef, settings, { merge: true });
+      await setDoc(docRef, cleanForFirestore(settings), { merge: true });
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `${COLLECTIONS.SETTINGS}/${SETTINGS_DOC_ID}`);
     }
@@ -302,7 +327,7 @@ export class FirebaseStorageService {
     StorageService.saveOrder(newOrder);
 
     try {
-      await setDoc(doc(db, COLLECTIONS.ORDERS, id), newOrder);
+      await setDoc(doc(db, COLLECTIONS.ORDERS, id), cleanForFirestore(newOrder));
     } catch (e) {
       handleFirestoreError(e, OperationType.WRITE, `${COLLECTIONS.ORDERS}/${id}`);
     }
@@ -340,18 +365,18 @@ export class FirebaseStorageService {
 
       // Salva a ordem de corte
       const orderRef = doc(db, COLLECTIONS.ORDERS, order.id);
-      batch.set(orderRef, order);
+      batch.set(orderRef, cleanForFirestore(order));
 
       // Atualiza as chapas no Firestore
       for (const sheet of updatedSheets) {
         const sheetRef = doc(db, COLLECTIONS.SHEETS, sheet.id);
-        batch.set(sheetRef, sheet, { merge: true });
+        batch.set(sheetRef, cleanForFirestore(sheet), { merge: true });
       }
 
       // Adiciona novos retalhos no Firestore
       for (const scrap of newScraps) {
         const scrapRef = doc(db, COLLECTIONS.SCRAPS, scrap.id);
-        batch.set(scrapRef, scrap);
+        batch.set(scrapRef, cleanForFirestore(scrap));
       }
 
       await batch.commit();

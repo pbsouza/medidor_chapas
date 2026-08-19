@@ -52,7 +52,7 @@ export const SettingsModal: React.FC<Props> = ({
       safetyMargin,
       defaultUnit,
       defaultPriority,
-      preferredWidth: preferredWidth > 0 ? preferredWidth : undefined,
+      preferredWidth: preferredWidth > 0 ? preferredWidth : 0,
       prioritizeMostInStock,
     });
     onClose();

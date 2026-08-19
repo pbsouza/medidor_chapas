@@ -19,13 +19,15 @@ export const DEFAULT_SETTINGS: MachineSettings = {
   spliceOverlapLength: 100, // 100 mm (10 cm de emenda / transpasse a cada divisão ao meio)
   autoSplitLongPieces: true, // Divisão simétrica automática ao meio para peças > 7 metros
   allowCoilCustomCut: true, // Otimização para rolo contínuo de 30 a 40 metros
-  kerf: 2, // 2 mm perda de serra/corte
-  safetyMargin: 5, // 5 mm margem de borda
-  minSpacing: 3, // 3 mm espaçamento
+  kerf: 0, // 0 mm perda de corte por guilhotina/faca (permite corte cravado sem perdas)
+  safetyMargin: 0, // 0 mm margem de segurança (permite 100% de aproveitamento das bordas)
+  minSpacing: 0, // 0 mm espaçamento
   scrapMinLength: 400, // 400 mm
   scrapMinWidth: 150, // 150 mm
   defaultPriority: 'balanced',
   defaultUnit: 'mm',
+  preferredWidth: 0,
+  prioritizeMostInStock: false,
 };
 
 // Sem dados de exemplo fictícios

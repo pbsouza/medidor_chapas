@@ -7,12 +7,14 @@ import {
   PieceType,
   PriorityMode,
   ScrapItem,
+  SheetCutPlan,
   SheetItem,
   UnitType,
 } from '../types';
 import { CutOptimizationService } from '../services/CutOptimizationService';
 import { GeometryService } from '../services/GeometryService';
 import { ExportService } from '../services/ExportService';
+import { AiCuttingService, AiOptimizationResult } from '../services/AiCuttingService';
 import { VisualCutDiagram } from './VisualCutDiagram';
 import {
   Scissors,
@@ -64,6 +66,8 @@ export const CutOrderManager: React.FC<Props> = ({
   const [priority, setPriority] = useState<PriorityMode>(settings.defaultPriority || 'use_scraps_first');
   const [preferredWidth, setPreferredWidth] = useState<number>(settings.preferredWidth || 0);
   const [prioritizeMostInStock, setPrioritizeMostInStock] = useState<boolean>(settings.prioritizeMostInStock || false);
+  const [customSafetyMargin, setCustomSafetyMargin] = useState<number>(settings.safetyMargin !== undefined ? settings.safetyMargin : 0);
+  const [customKerf, setCustomKerf] = useState<number>(settings.kerf !== undefined ? settings.kerf : 0);
   const [orderName, setOrderName] = useState('Ordem de Corte #001');
   const [customerName, setCustomerName] = useState('');
 
@@ -83,6 +87,22 @@ export const CutOrderManager: React.FC<Props> = ({
   const [solutions, setSolutions] = useState<OptimizationSolution[]>([]);
   const [selectedSolutionIndex, setSelectedSolutionIndex] = useState<number>(0);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [aiResult, setAiResult] = useState<AiOptimizationResult | null>(null);
+  const [isLoadingAi, setIsLoadingAi] = useState(false);
+
+  // Executar Otimização com IA Gemini
+  const handleAiOptimization = async () => {
+    if (pieces.length === 0) return;
+    setIsLoadingAi(true);
+    try {
+      const result = await AiCuttingService.requestAiOptimization(pieces, sheets, scraps, settings);
+      setAiResult(result);
+    } catch (err) {
+      console.error('Erro na análise de IA Gemini:', err);
+    } finally {
+      setIsLoadingAi(false);
+    }
+  };
 
   // Coleta larguras disponíveis no estoque
   const availableWidths: number[] = Array.from(
@@ -98,7 +118,9 @@ export const CutOrderManager: React.FC<Props> = ({
     piecesToOptimize: CutPiece[],
     optPriority = priority,
     optWidth = preferredWidth,
-    optMostStock = prioritizeMostInStock
+    optMostStock = prioritizeMostInStock,
+    optMargin = customSafetyMargin,
+    optKerf = customKerf
   ) => {
     if (piecesToOptimize.length === 0) {
       setSolutions([]);
@@ -113,6 +135,8 @@ export const CutOrderManager: React.FC<Props> = ({
           defaultPriority: optPriority,
           preferredWidth: optWidth > 0 ? optWidth : undefined,
           prioritizeMostInStock: optPriority === 'most_stock_first' || optMostStock,
+          safetyMargin: optMargin,
+          kerf: optKerf,
         };
 
         const results = CutOptimizationService.generateSolutions(
@@ -131,12 +155,12 @@ export const CutOrderManager: React.FC<Props> = ({
     }, 150);
   };
 
-  // Calcula na inicialização e quando as chapas/retalhos/peças mudarem
+  // Calcula na inicialização e quando as chapas/retalhos/peças/margens mudarem
   React.useEffect(() => {
     if (pieces.length > 0) {
-      runOptimizationWithPieces(pieces, priority, preferredWidth, prioritizeMostInStock);
+      runOptimizationWithPieces(pieces, priority, preferredWidth, prioritizeMostInStock, customSafetyMargin, customKerf);
     }
-  }, [sheets, scraps, settings, priority, preferredWidth, prioritizeMostInStock]);
+  }, [sheets, scraps, settings, priority, preferredWidth, prioritizeMostInStock, customSafetyMargin, customKerf]);
 
   // Adicionar Peça
   const handleAddPiece = (e?: React.FormEvent) => {
@@ -294,6 +318,34 @@ export const CutOrderManager: React.FC<Props> = ({
     alert('Ordem executada e estoque atualizado com sucesso!');
   };
 
+  const handlePlanUpdated = (planIndex: number, updatedPlan: SheetCutPlan) => {
+    if (!selectedSolution) return;
+    const updatedPlans = [...selectedSolution.plans];
+    updatedPlans[planIndex] = updatedPlan;
+
+    // Recalcula totais da solução com base no ajuste manual
+    let totalUsed = 0;
+    let totalSheet = 0;
+    let totalWaste = 0;
+    for (const p of updatedPlans) {
+      totalUsed += p.usedAreaMm2;
+      totalSheet += p.totalAreaMm2;
+      totalWaste += p.wasteAreaMm2;
+    }
+    const newYield = totalSheet > 0 ? Math.round((totalUsed / totalSheet) * 1000) / 10 : 0;
+
+    const updatedSolution: OptimizationSolution = {
+      ...selectedSolution,
+      plans: updatedPlans,
+      yieldPercentage: newYield,
+      totalWasteAreaMm2: totalWaste,
+    };
+
+    const updatedSolutions = [...solutions];
+    updatedSolutions[selectedSolutionIndex] = updatedSolution;
+    setSolutions(updatedSolutions);
+  };
+
   const hasLongPieces = pieces.some((p) => p.length > settings.maxCutLength);
 
   return (
@@ -442,11 +494,92 @@ export const CutOrderManager: React.FC<Props> = ({
                   const val = e.target.checked;
                   setPrioritizeMostInStock(val);
                   if (pieces.length > 0) {
-                    runOptimizationWithPieces(pieces, priority, preferredWidth, val);
+                    runOptimizationWithPieces(pieces, priority, preferredWidth, val, customSafetyMargin, customKerf);
                   }
                 }}
                 className="w-4 h-4 text-blue-600 rounded cursor-pointer"
               />
+            </div>
+
+            {/* Controle Rápido de Margem de Segurança & Perda da Lâmina */}
+            <div className="p-3.5 bg-blue-50/70 border border-blue-200 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-900 block">Margem de Segurança & Borda</span>
+                  <span className="text-[10px] text-slate-500">
+                    Ajuste ou anule a margem para encaixe 100% sem desperdício
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomSafetyMargin(0);
+                    setCustomKerf(0);
+                    if (pieces.length > 0) {
+                      runOptimizationWithPieces(pieces, priority, preferredWidth, prioritizeMostInStock, 0, 0);
+                    }
+                  }}
+                  className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all ${
+                    customSafetyMargin === 0 && customKerf === 0
+                      ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                  }`}
+                  title="Anula margens e perdas para permitir aproveitamento de 100% da bobina"
+                >
+                  ⚡ Margem Zero (100% Útil)
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                    Margem de Borda:
+                  </label>
+                  <select
+                    value={customSafetyMargin}
+                    onChange={(e) => {
+                      const m = parseFloat(e.target.value) || 0;
+                      setCustomSafetyMargin(m);
+                      if (pieces.length > 0) {
+                        runOptimizationWithPieces(pieces, priority, preferredWidth, prioritizeMostInStock, m, customKerf);
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-300 text-xs font-bold text-slate-900 px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-blue-500"
+                  >
+                    <option value={0}>0 mm (Anulada • Cravado)</option>
+                    <option value={1}>1 mm</option>
+                    <option value={2}>2 mm</option>
+                    <option value={3}>3 mm</option>
+                    <option value={5}>5 mm (Padrão Antigo)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                    Perda de Corte (Kerf):
+                  </label>
+                  <select
+                    value={customKerf}
+                    onChange={(e) => {
+                      const k = parseFloat(e.target.value) || 0;
+                      setCustomKerf(k);
+                      if (pieces.length > 0) {
+                        runOptimizationWithPieces(pieces, priority, preferredWidth, prioritizeMostInStock, customSafetyMargin, k);
+                      }
+                    }}
+                    className="w-full bg-white border border-slate-300 text-xs font-bold text-slate-900 px-2.5 py-1.5 rounded-lg focus:outline-none focus:border-blue-500"
+                  >
+                    <option value={0}>0 mm (Guilhotina / Faca)</option>
+                    <option value={1}>1 mm</option>
+                    <option value={2}>2 mm</option>
+                    <option value={3}>3 mm</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="text-[10px] text-blue-900 bg-white/70 border border-blue-100 rounded p-1.5 leading-tight">
+                💡 <em>Dica:</em> Com <strong>Margem 0mm</strong>, duas peças de 25cm usam exatamente os 50cm da bobina com <strong>100% de aproveitamento</strong> e zero sobra.
+              </div>
             </div>
           </div>
 
@@ -748,54 +881,226 @@ export const CutOrderManager: React.FC<Props> = ({
             </button>
           </form>
 
-          {/* Botão de Calcular Otimização 2D */}
-          <button
-            id="run-optimization-btn"
-            type="button"
-            disabled={pieces.length === 0 || isCalculating}
-            onClick={handleRunOptimization}
-            className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-black text-sm uppercase tracking-widest rounded-xl shadow-lg shadow-blue-900/40 transition-all flex items-center justify-center gap-2 active:scale-98"
-          >
-            <Play className={`w-4 h-4 fill-white ${isCalculating ? 'animate-spin' : ''}`} />
-            <span>{isCalculating ? 'Calculando Otimização 2D...' : 'CALCULAR PLANO DE CORTE'}</span>
-          </button>
+          {/* Botões de Ação de Cálculo */}
+          <div className="space-y-2">
+            <button
+              id="run-optimization-btn"
+              type="button"
+              disabled={pieces.length === 0 || isCalculating}
+              onClick={handleRunOptimization}
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-black text-sm uppercase tracking-widest rounded-xl shadow-lg shadow-blue-900/40 transition-all flex items-center justify-center gap-2 active:scale-98"
+            >
+              <Play className={`w-4 h-4 fill-white ${isCalculating ? 'animate-spin' : ''}`} />
+              <span>{isCalculating ? 'Calculando Otimização 2D...' : 'CALCULAR PLANO DE CORTE'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={pieces.length === 0 || isLoadingAi}
+              onClick={handleAiOptimization}
+              className="w-full py-2.5 bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 disabled:opacity-50 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-md transition-all flex items-center justify-center gap-2"
+            >
+              <Sparkles className={`w-4 h-4 ${isLoadingAi ? 'animate-spin' : ''}`} />
+              <span>{isLoadingAi ? 'IA Gemini Analisando...' : '✨ Otimizar & Diagnosticar com IA Gemini'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Coluna Direita: Resultados & Diagramas Visuais 2D */}
         <div className="lg:col-span-7 space-y-6">
+          {/* Card de Diagnóstico Inteligente com IA Gemini */}
+          {aiResult && aiResult.success && (
+            <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-blue-950 text-white rounded-2xl p-5 shadow-xl border border-indigo-500/30 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 bg-indigo-500/20 rounded-lg border border-indigo-400/30">
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-black text-sm text-white">Diagnóstico & Estratégia de Corte (IA Gemini)</h4>
+                    <p className="text-[11px] text-indigo-200">Recomendação técnica baseada em geometria de calharia</p>
+                  </div>
+                </div>
+                <div className="px-3 py-1 bg-emerald-500/20 border border-emerald-400/40 rounded-full text-emerald-300 font-mono text-xs font-black">
+                  {aiResult.estimatedYieldPercentage}% Rendimento
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/5 border border-white/10 rounded-xl p-3 text-xs">
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Bobina Recomendada</span>
+                  <span className="text-sm font-bold text-indigo-300 font-mono">Bobina {aiResult.bestCoilWidthCm} cm</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Desenrolar do Rolo</span>
+                  <span className="text-sm font-bold text-white font-mono">{aiResult.unrollLengthMeters.toFixed(2)} metros</span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Sobra Lateral Residual</span>
+                  <span className="text-sm font-bold text-amber-300 font-mono">{aiResult.lateralWasteCm} cm</span>
+                </div>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-300 block">
+                    📐 Distribuição de Tiras na Largura (Uma embaixo da outra)
+                  </span>
+                  <p className="text-slate-200 text-xs leading-relaxed">{aiResult.stripStackingExplanation}</p>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-300 block">
+                    ✂️ Passos Práticos para a Guilhotina
+                  </span>
+                  <ul className="space-y-1 text-slate-200">
+                    {aiResult.guillotineStepByStep.map((step, sIdx) => (
+                      <li key={sIdx} className="flex items-start gap-2">
+                        <span className="text-emerald-400 font-bold font-mono text-[11px]">{sIdx + 1}.</span>
+                        <span>{step}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+
           {solutions.length > 0 && selectedSolution ? (
             <div className="space-y-6">
-              {/* Seletor das 3 Soluções Calculadas (Geometric Balance Style) */}
-              <div className="grid grid-cols-3 gap-3">
-                {solutions.map((sol, sIdx) => {
-                  const isSelected = selectedSolutionIndex === sIdx;
-                  return (
-                    <div
-                      key={sol.id}
-                      onClick={() => setSelectedSolutionIndex(sIdx)}
-                      className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between ${
-                        isSelected
-                          ? 'bg-blue-50 border-2 border-blue-500 shadow-md'
-                          : 'bg-white border-slate-200 hover:border-slate-300 shadow-sm'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          {sIdx === 0 ? '🥇 Opção A' : sIdx === 1 ? '🥈 Opção B' : '🥉 Opção C'}
-                        </span>
-                        {isSelected && <span className="w-2 h-2 rounded-full bg-blue-600"></span>}
-                      </div>
+              {/* Cabeçalho de Seleção de Opções com Teste de Todas as Bobinas */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <span>Opções de Corte Calculadas ({solutions.length} alternativas)</span>
+                  </h3>
+                  <span className="text-[11px] text-slate-500 font-medium">
+                    Testadas bobinas de 30cm a 1,20m
+                  </span>
+                </div>
 
-                      <div className="text-lg font-black text-slate-900 font-mono">
-                        {sol.yieldPercentage}%
+                {/* Seletor das Soluções Calculadas */}
+                <div className={`grid grid-cols-1 sm:grid-cols-2 ${solutions.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-3`}>
+                  {solutions.map((sol, sIdx) => {
+                    const isSelected = selectedSolutionIndex === sIdx;
+                    const primaryWidth = sol.primaryWidthMm
+                      ? `${sol.primaryWidthMm / 10} cm`
+                      : `${sol.plans[0]?.width / 10} cm`;
+                    const meters = sol.totalLengthCutMeters || Math.round((sol.plans.reduce((acc, p) => acc + p.length, 0) / 1000) * 100) / 100;
+                    const wasteCm = sol.lateralWasteMm !== undefined
+                      ? `${(sol.lateralWasteMm / 10).toFixed(1)} cm`
+                      : 'mínima';
+
+                    return (
+                      <div
+                        key={sol.id}
+                        onClick={() => setSelectedSolutionIndex(sIdx)}
+                        className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between relative ${
+                          isSelected
+                            ? 'bg-blue-50 border-2 border-blue-600 shadow-md ring-1 ring-blue-500/30'
+                            : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
+                        }`}
+                      >
+                        <div>
+                          <div className="flex items-center justify-between mb-1.5">
+                            <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
+                              sIdx === 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {sIdx === 0 ? '🥇 Opção 1 (Melhor)' : sIdx === 1 ? '🥈 Opção 2' : sIdx === 2 ? '🥉 Opção 3' : `Opção ${sIdx + 1}`}
+                            </span>
+                            {isSelected && <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>}
+                          </div>
+
+                          <div className="font-bold text-xs text-slate-900 flex items-center gap-1">
+                            <span>Bobina {primaryWidth}</span>
+                          </div>
+
+                          <div className="text-[11px] text-slate-600 font-mono mt-1 space-y-0.5">
+                            <div>Desenrolar: <strong className="text-slate-900">{meters.toFixed(2)}m</strong></div>
+                            <div>Sobra lateral: <strong className="text-amber-700">{wasteCm}</strong></div>
+                          </div>
+                        </div>
+
+                        <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between">
+                          <span className="text-[10px] uppercase font-bold text-slate-400">Rendimento</span>
+                          <span className={`text-base font-black font-mono ${
+                            sol.yieldPercentage >= 85 ? 'text-emerald-600' : sol.yieldPercentage >= 70 ? 'text-blue-600' : 'text-slate-700'
+                          }`}>
+                            {sol.yieldPercentage}%
+                          </span>
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500 mt-0.5 leading-tight">
-                        {sol.totalSheetsUsed} chapa(s) • {sol.totalScrapsUsed} retalho(s)
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
+
+              {/* Comparativo Completo de Todas as Larguras de Bobinas Testadas (30cm a 1,20m) */}
+              {selectedSolution.allTestedWidthsComparison && selectedSolution.allTestedWidthsComparison.length > 0 && (
+                <details className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 shadow-sm text-xs group">
+                  <summary className="cursor-pointer font-bold text-slate-700 flex items-center justify-between select-none">
+                    <span className="flex items-center gap-2">
+                      <span>📊</span>
+                      <span>Ver Comparativo de Todas as Larguras Testadas (30cm, 40cm, 50cm, 60cm, 70cm, 80cm, 90cm, 1m, 1.20m)</span>
+                    </span>
+                    <span className="text-[10px] text-blue-600 font-bold group-open:hidden">+ Expandir</span>
+                  </summary>
+
+                  <div className="mt-3 pt-3 border-t border-slate-200 overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-[10px] uppercase text-slate-400 font-mono">
+                          <th className="pb-1.5 font-bold">Largura Bobina</th>
+                          <th className="pb-1.5 font-bold">Status</th>
+                          <th className="pb-1.5 font-bold">Desenrolar (m)</th>
+                          <th className="pb-1.5 font-bold">Sobra Lateral</th>
+                          <th className="pb-1.5 font-bold text-right">Rendimento</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 text-xs">
+                        {selectedSolution.allTestedWidthsComparison.map((comp) => {
+                          const isCurrent = selectedSolution.primaryWidthMm === comp.widthMm;
+                          return (
+                            <tr
+                              key={comp.widthMm}
+                              className={`hover:bg-slate-100/80 transition-colors ${
+                                isCurrent ? 'bg-blue-50/80 font-bold text-blue-900' : 'text-slate-700'
+                              }`}
+                            >
+                              <td className="py-2 font-mono font-bold">
+                                {comp.widthCm} cm ({comp.widthMm} mm)
+                                {isCurrent && <span className="ml-1.5 text-[9px] px-1.5 py-0.2 bg-blue-600 text-white rounded font-sans">Selecionada</span>}
+                              </td>
+                              <td className="py-2">
+                                {comp.feasible ? (
+                                  <span className="text-emerald-700 font-bold text-[11px]">✓ Viável</span>
+                                ) : (
+                                  <span className="text-red-500 text-[10px] italic">Inviável</span>
+                                )}
+                              </td>
+                              <td className="py-2 font-mono">
+                                {comp.feasible ? `${comp.metersToUnroll.toFixed(2)}m` : '-'}
+                              </td>
+                              <td className="py-2 font-mono text-amber-800">
+                                {comp.feasible ? `${comp.lateralWasteCm} cm` : '-'}
+                              </td>
+                              <td className="py-2 text-right font-mono font-bold">
+                                {comp.feasible ? (
+                                  <span className={comp.yieldPercentage >= 85 ? 'text-emerald-600' : 'text-slate-700'}>
+                                    {comp.yieldPercentage}%
+                                  </span>
+                                ) : (
+                                  '-'
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </details>
+              )}
 
               {/* Destaque para Cortes de Bobina / Rolo de 30-40 metros */}
               {selectedSolution.coilCutSuggestions && selectedSolution.coilCutSuggestions.length > 0 && (
@@ -860,7 +1165,12 @@ export const CutOrderManager: React.FC<Props> = ({
                 </div>
 
                 {selectedSolution.plans.map((plan, pIdx) => (
-                  <VisualCutDiagram key={`plan-${plan.sheetId}-${pIdx}`} plan={plan} index={pIdx} />
+                  <VisualCutDiagram
+                    key={`plan-${plan.sheetId}-${pIdx}`}
+                    plan={plan}
+                    index={pIdx}
+                    onUpdatePlan={(updatedPlan) => handlePlanUpdated(pIdx, updatedPlan)}
+                  />
                 ))}
               </div>
 

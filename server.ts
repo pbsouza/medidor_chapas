@@ -239,6 +239,120 @@ REGRAS DE RESPOSTA:
   }
 });
 
+// AI Cut Optimization Analysis Endpoint
+app.post("/api/ai/optimize-cut", async (req, res) => {
+  try {
+    const { pieces, inventory, scraps, machineLimits } = req.body;
+
+    if (!pieces || !Array.isArray(pieces) || pieces.length === 0) {
+      return res.status(400).json({ error: "Lista de peças obrigatória para análise de corte." });
+    }
+
+    const ai = getAiClient();
+
+    const prompt = `Você é um engenheiro sênior especialista em otimização de corte 2D de chapas metálicas, funilaria e fabricação de calhas/rufos.
+
+Analise as seguintes peças solicitadas para corte:
+${JSON.stringify(pieces, null, 2)}
+
+Configurações e limites da guilhotina/máquina:
+${JSON.stringify(machineLimits || { maxCutLength: 7000, kerf: 2, safetyMargin: 5 })}
+
+Estoque disponível:
+- Chapas: ${JSON.stringify(inventory || [])}
+- Retalhos: ${JSON.stringify(scraps || [])}
+
+Larguras comerciais padrão de bobina disponíveis no mercado: 30cm, 40cm, 50cm, 60cm, 70cm, 80cm, 90cm, 100cm (1m), 120cm (1.20m).
+
+SUA MISSÃO:
+1. Calcule como empilhar as tiras na largura (colocando uma peça embaixo da outra ao longo do eixo Y da chapa) para minimizar o comprimento desenrolado da bobina.
+2. Identifique qual largura de bobina comercial gera a menor sobra lateral residual e maior aproveitamento (% Yield).
+3. Se houver peças trapezoidais (ex: 400->350mm), detalhe o pareamento inverso (ponta maior com ponta menor) que elimina o desperdício diagonal.
+4. Forneça instruções passo a passo para o operador da guilhotina.
+
+Retorne sua resposta estritamente no esquema JSON solicitado.`;
+
+    const response = await executeGenAiWithFallback(ai, async (model) => {
+      return await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              success: { type: Type.BOOLEAN },
+              bestCoilWidthCm: {
+                type: Type.NUMBER,
+                description: "Largura ideal da bobina em centímetros (ex: 80 para 80cm)",
+              },
+              unrollLengthMeters: {
+                type: Type.NUMBER,
+                description: "Comprimento total da folha a ser desenrolada do rolo em metros (ex: 3.0)",
+              },
+              lateralWasteCm: {
+                type: Type.NUMBER,
+                description: "Sobra lateral restante em centímetros (ex: 5.0)",
+              },
+              estimatedYieldPercentage: {
+                type: Type.NUMBER,
+                description: "Taxa estimada de aproveitamento percentual (ex: 93.8)",
+              },
+              expertDiagnosis: {
+                type: Type.STRING,
+                description: "Diagnóstico técnico resumido explicando por que essa é a melhor escolha geométrica.",
+              },
+              stripStackingExplanation: {
+                type: Type.STRING,
+                description: "Explicação de como as peças ficam distribuídas na largura (uma embaixo da outra).",
+              },
+              guillotineStepByStep: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: "Passos práticos de corte para o operador da guilhotina.",
+              },
+              alternativeOptions: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    coilWidthCm: { type: Type.NUMBER },
+                    unrollMeters: { type: Type.NUMBER },
+                    lateralWasteCm: { type: Type.NUMBER },
+                    yieldPercentage: { type: Type.NUMBER },
+                    comment: { type: Type.STRING },
+                  },
+                  required: ["coilWidthCm", "unrollMeters", "lateralWasteCm", "yieldPercentage"],
+                },
+                description: "Comparativo das outras opções de bobina testadas.",
+              },
+            },
+            required: [
+              "success",
+              "bestCoilWidthCm",
+              "unrollLengthMeters",
+              "lateralWasteCm",
+              "estimatedYieldPercentage",
+              "expertDiagnosis",
+              "stripStackingExplanation",
+              "guillotineStepByStep",
+            ],
+          },
+        },
+      });
+    });
+
+    const parsed = JSON.parse(response.text || "{}");
+    return res.json(parsed);
+  } catch (error: any) {
+    console.error("Erro na otimização com IA Gemini:", error);
+    return res.status(500).json({
+      success: false,
+      error: error?.message || "Falha ao processar otimização com IA Gemini.",
+    });
+  }
+});
+
 // Vite Middleware or Static Production Serving
 async function startServer() {
   try {

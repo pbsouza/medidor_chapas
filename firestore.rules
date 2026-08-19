@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Regras para Chapas Inteiras
+    match /sheets/{sheetId} {
+      allow read, write: if true;
+    }
+    
+    // Regras para Retalhos e Sobras
+    match /scraps/{scrapId} {
+      allow read, write: if true;
+    }
+    
+    // Regras para Ordens de Corte
+    match /cutOrders/{orderId} {
+      allow read, write: if true;
+    }
+    
+    // Regras para Configurações da Máquina
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
+  }
+}

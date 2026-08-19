@@ -1,0 +1,105 @@
+{
+  "entities": {
+    "Sheet": {
+      "title": "Sheet",
+      "description": "Chapa inteira do estoque para corte de calhas e rufos",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "width": { "type": "number" },
+        "length": { "type": "number" },
+        "quantity": { "type": "number" },
+        "material": { "type": "string" },
+        "thickness": { "type": "string" },
+        "color": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["name", "width", "length", "quantity", "material", "thickness"]
+    },
+    "Scrap": {
+      "title": "Scrap",
+      "description": "Retalho e sobra aproveitável de chapa",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "width": { "type": "number" },
+        "length": { "type": "number" },
+        "quantity": { "type": "number" },
+        "material": { "type": "string" },
+        "thickness": { "type": "string" },
+        "color": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["disponivel", "reservado", "utilizado"] },
+        "sourceOrderId": { "type": "string" },
+        "sourceSheetName": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["code", "width", "length", "quantity", "material", "thickness", "status"]
+    },
+    "CutOrder": {
+      "title": "CutOrder",
+      "description": "Ordem de corte planejada e executada com histórico e métricas",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "orderNumber": { "type": "string" },
+        "title": { "type": "string" },
+        "customerName": { "type": "string" },
+        "status": { "type": "string", "enum": ["planejamento", "confirmada", "cortada", "cancelada"] },
+        "pieces": { "type": "array" },
+        "selectedSolution": { "type": "object" },
+        "machineSettings": { "type": "object" },
+        "yieldPercentage": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "executedAt": { "type": "string" },
+        "notes": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["orderNumber", "status", "pieces"]
+    },
+    "MachineSetting": {
+      "title": "MachineSetting",
+      "description": "Configurações de guilhotina e parâmetros de tolerância de corte",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "maxCutLength": { "type": "number" },
+        "kerf": { "type": "number" },
+        "safetyMargin": { "type": "number" },
+        "minSpacing": { "type": "number" },
+        "scrapMinLength": { "type": "number" },
+        "scrapMinWidth": { "type": "number" },
+        "defaultPriority": { "type": "string" },
+        "defaultUnit": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "userId": { "type": "string" }
+      },
+      "required": ["maxCutLength", "kerf", "safetyMargin"]
+    }
+  },
+  "firestore": {
+    "/sheets/{sheetId}": {
+      "schema": "Sheet",
+      "description": "Coleção de chapas inteiras em estoque"
+    },
+    "/scraps/{scrapId}": {
+      "schema": "Scrap",
+      "description": "Coleção de retalhos com códigos rastreáveis"
+    },
+    "/cutOrders/{orderId}": {
+      "schema": "CutOrder",
+      "description": "Coleção de ordens de corte e histórico de execuções"
+    },
+    "/settings/{settingId}": {
+      "schema": "MachineSetting",
+      "description": "Documentos de configuração do sistema e máquinas"
+    }
+  }
+}

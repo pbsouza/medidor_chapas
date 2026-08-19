@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .blueprint-grid {
+    background-color: #f8fafc;
+    background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  .blueprint-grid-dark {
+    background-color: #0f172a;
+    background-image: radial-gradient(#334155 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+}

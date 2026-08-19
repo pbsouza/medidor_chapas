@@ -1,0 +1,6 @@
+{
+  "name": "CorteFácil — Otimizador de Chapas",
+  "description": "Otimizador profissional de cortes de chapas metálicas e retalhos para calhas, rufos e pingadeiras com IA e encaixe 2D.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

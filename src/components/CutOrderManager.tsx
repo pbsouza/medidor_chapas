@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CutOrder,
   CutPiece,
@@ -15,7 +15,11 @@ import { CutOptimizationService } from '../services/CutOptimizationService';
 import { GeometryService } from '../services/GeometryService';
 import { ExportService } from '../services/ExportService';
 import { AiCuttingService, AiOptimizationResult } from '../services/AiCuttingService';
+import { StorageService } from '../services/StorageService';
+import { FirebaseStorageService } from '../services/FirebaseStorageService';
 import { VisualCutDiagram } from './VisualCutDiagram';
+import { PhotoImportModal } from './PhotoImportModal';
+import { SavedPlansModal } from './SavedPlansModal';
 import {
   Scissors,
   Plus,
@@ -31,6 +35,14 @@ import {
   ArrowRight,
   TrendingUp,
   Award,
+  Camera,
+  Save,
+  FolderOpen,
+  Pencil,
+  Copy,
+  Check,
+  X,
+  FileText,
 } from 'lucide-react';
 
 interface Props {
@@ -62,6 +74,16 @@ export const CutOrderManager: React.FC<Props> = ({
   // Peças da Ordem (inicia totalmente limpo sem dados de exemplo)
   const [pieces, setPieces] = useState<CutPiece[]>([]);
 
+  // Estado de Edição de Peça Específica
+  const [editingPieceId, setEditingPieceId] = useState<string | null>(null);
+
+  // Modais de IA e Planos Salvos
+  const [isPhotoModalOpen, setIsPhotoModalOpen] = useState(false);
+  const [isSavedPlansModalOpen, setIsSavedPlansModalOpen] = useState(false);
+  const [savedOrders, setSavedOrders] = useState<CutOrder[]>(() => StorageService.getOrders());
+  const [currentOrderId, setCurrentOrderId] = useState<string | null>(null);
+  const [notificationToast, setNotificationToast] = useState<string | null>(null);
+
   // Parâmetros de Otimização
   const [priority, setPriority] = useState<PriorityMode>(settings.defaultPriority || 'use_scraps_first');
   const [preferredWidth, setPreferredWidth] = useState<number>(settings.preferredWidth || 0);
@@ -71,7 +93,7 @@ export const CutOrderManager: React.FC<Props> = ({
   const [orderName, setOrderName] = useState('Ordem de Corte #001');
   const [customerName, setCustomerName] = useState('');
 
-  // Input de Nova Peça
+  // Input de Nova Peça / Edição
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<PieceType>('calha_platibanda');
   const [newDevStart, setNewDevStart] = useState<number>(500);
@@ -89,6 +111,21 @@ export const CutOrderManager: React.FC<Props> = ({
   const [isCalculating, setIsCalculating] = useState(false);
   const [aiResult, setAiResult] = useState<AiOptimizationResult | null>(null);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
+
+  // Sincronização em tempo real das ordens salvas
+  useEffect(() => {
+    const unsub = FirebaseStorageService.subscribeToOrders((updatedOrders) => {
+      setSavedOrders(updatedOrders);
+    });
+    return () => unsub();
+  }, []);
+
+  const showToast = (msg: string) => {
+    setNotificationToast(msg);
+    setTimeout(() => {
+      setNotificationToast((curr) => (curr === msg ? null : curr));
+    }, 4000);
+  };
 
   // Executar Otimização com IA Gemini
   const handleAiOptimization = async () => {
@@ -162,8 +199,40 @@ export const CutOrderManager: React.FC<Props> = ({
     }
   }, [sheets, scraps, settings, priority, preferredWidth, prioritizeMostInStock, customSafetyMargin, customKerf]);
 
-  // Adicionar Peça
-  const handleAddPiece = (e?: React.FormEvent) => {
+  // Iniciar Edição de Peça Específica
+  const handleStartEditPiece = (piece: CutPiece) => {
+    setEditingPieceId(piece.id);
+    setNewName(piece.name);
+    setNewType(piece.type);
+    setNewDevStart(piece.devStart);
+    setNewDevEnd(piece.devEnd);
+    setNewLength(piece.length);
+    setNewQuantity(piece.quantity);
+    setNewMaterial(piece.material || 'Galvanizado');
+    setNewThickness(piece.thickness || '0.50mm');
+    setIsTrapezoidMode(piece.devStart !== piece.devEnd);
+    setInputUnit('mm');
+
+    // Rola suavemente até o formulário
+    const formElement = document.getElementById('piece-input-form');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  };
+
+  // Cancelar Edição de Peça
+  const handleCancelEditPiece = () => {
+    setEditingPieceId(null);
+    setNewName('');
+    setNewDevStart(500);
+    setNewDevEnd(500);
+    setNewLength(3000);
+    setNewQuantity(1);
+    setIsTrapezoidMode(false);
+  };
+
+  // Adicionar ou Salvar Edição de Peça
+  const handleAddOrSavePiece = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const devStartMm = GeometryService.convertToMm(newDevStart, inputUnit);
     const devEndMm = isTrapezoidMode ? GeometryService.convertToMm(newDevEnd, inputUnit) : devStartMm;
@@ -174,27 +243,161 @@ export const CutOrderManager: React.FC<Props> = ({
       return;
     }
 
-    const piece: CutPiece = {
-      id: `p_${Date.now()}`,
-      name: newName || `Peça ${pieces.length + 1}`,
-      type: newType,
-      devStart: devStartMm,
-      devEnd: devEndMm,
-      length: lengthMm,
-      quantity: Math.max(1, newQuantity),
-      material: newMaterial,
-      thickness: newThickness,
+    if (editingPieceId) {
+      // Modo Edição: Atualiza a peça existente
+      const updatedPieces = pieces.map((p) =>
+        p.id === editingPieceId
+          ? {
+              ...p,
+              name: newName || p.name,
+              type: newType,
+              devStart: devStartMm,
+              devEnd: devEndMm,
+              length: lengthMm,
+              quantity: Math.max(1, newQuantity),
+              material: newMaterial,
+              thickness: newThickness,
+            }
+          : p
+      );
+      setPieces(updatedPieces);
+      setEditingPieceId(null);
+      setNewName('');
+      runOptimizationWithPieces(updatedPieces);
+      showToast(`Peça "${newName || 'atualizada'}" salva com sucesso!`);
+    } else {
+      // Modo Criação: Adiciona nova peça
+      const piece: CutPiece = {
+        id: `p_${Date.now()}`,
+        name: newName || `Peça ${pieces.length + 1}`,
+        type: newType,
+        devStart: devStartMm,
+        devEnd: devEndMm,
+        length: lengthMm,
+        quantity: Math.max(1, newQuantity),
+        material: newMaterial,
+        thickness: newThickness,
+      };
+
+      const updatedPieces = [...pieces, piece];
+      setPieces(updatedPieces);
+      setNewName('');
+      runOptimizationWithPieces(updatedPieces);
+    }
+  };
+
+  // Importar Peças lidas por IA a partir de Foto/Croqui
+  const handleImportPiecesFromPhoto = (importedPieces: CutPiece[]) => {
+    if (!importedPieces || importedPieces.length === 0) return;
+    const updated = [...pieces, ...importedPieces];
+    setPieces(updated);
+    runOptimizationWithPieces(updated);
+    showToast(`✓ ${importedPieces.length} peça(s) extraída(s) da foto e adicionadas ao plano!`);
+  };
+
+  // Salvar Plano de Corte para Continuar Depois (Persistência)
+  const handleSavePlanForLater = async () => {
+    if (pieces.length === 0) {
+      alert('Adicione pelo menos uma peça antes de salvar o plano de corte.');
+      return;
+    }
+
+    const currentSolution = solutions[selectedSolutionIndex] || null;
+    const orderIdToUse = currentOrderId || `ord_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+
+    const orderToSave: CutOrder = {
+      id: orderIdToUse,
+      orderNumber: orderName || `Plano #${Date.now().toString().slice(-4)}`,
+      title: orderName || 'Plano de Corte Personalizado',
+      customerName: customerName || 'Cliente Balcão',
+      status: 'planejamento',
+      pieces: pieces,
+      priority: priority,
+      machineSettings: settings,
+      selectedSolution: currentSolution || undefined,
+      yieldPercentage: currentSolution ? currentSolution.yieldPercentage : undefined,
+      createdAt: new Date().toISOString(),
     };
 
-    const updatedPieces = [...pieces, piece];
-    setPieces(updatedPieces);
-    setNewName('');
-    // Recalcula imediatamente para exibir a representação visual na hora
-    runOptimizationWithPieces(updatedPieces);
+    try {
+      await FirebaseStorageService.saveOrder(orderToSave);
+      setCurrentOrderId(orderIdToUse);
+      setSavedOrders(StorageService.getOrders());
+      showToast(`💾 Plano "${orderToSave.title}" salvo com sucesso! Você pode continuar a qualquer momento.`);
+    } catch (err) {
+      console.error('Erro ao salvar plano:', err);
+      showToast('Plano salvo localmente!');
+    }
+  };
+
+  // Carregar Plano Salvo para Continuar
+  const handleLoadSavedPlan = (order: CutOrder) => {
+    setCurrentOrderId(order.id);
+    setOrderName(order.title || order.orderNumber || 'Plano Carregado');
+    setCustomerName(order.customerName || '');
+    setPieces(order.pieces || []);
+    setEditingPieceId(null);
+
+    if (order.selectedSolution && order.selectedSolution.plans) {
+      setSolutions([order.selectedSolution]);
+      setSelectedSolutionIndex(0);
+    } else if (order.pieces && order.pieces.length > 0) {
+      runOptimizationWithPieces(order.pieces);
+    }
+
+    showToast(`📂 Plano "${order.title || order.orderNumber}" carregado com sucesso!`);
+  };
+
+  // Excluir Plano Salvo
+  const handleDeleteSavedPlan = async (orderId: string) => {
+    try {
+      await FirebaseStorageService.deleteOrder(orderId);
+      setSavedOrders(StorageService.getOrders());
+      if (currentOrderId === orderId) {
+        setCurrentOrderId(null);
+      }
+      showToast('Plano excluído.');
+    } catch (err) {
+      console.error('Erro ao excluir:', err);
+    }
+  };
+
+  // Duplicar Plano Salvo
+  const handleDuplicateSavedPlan = async (order: CutOrder) => {
+    const duplicatedOrder: CutOrder = {
+      ...order,
+      id: `ord_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+      title: `${order.title || order.orderNumber} (Cópia)`,
+      orderNumber: `${order.orderNumber} (Cópia)`,
+      createdAt: new Date().toISOString(),
+    };
+
+    try {
+      await FirebaseStorageService.saveOrder(duplicatedOrder);
+      setSavedOrders(StorageService.getOrders());
+      showToast(`Plano duplicado com sucesso!`);
+    } catch (err) {
+      console.error('Erro ao duplicar:', err);
+    }
+  };
+
+  // Iniciar Novo Plano Limpo do Zero
+  const handleNewPlan = () => {
+    setPieces([]);
+    setSolutions([]);
+    setCurrentOrderId(null);
+    setOrderName(`Ordem de Corte #${(savedOrders.length + 1).toString().padStart(3, '0')}`);
+    setCustomerName('');
+    setEditingPieceId(null);
+    setAiResult(null);
+    showToast('Novo plano em branco pronto para edição.');
   };
 
   // Remover Peça
   const handleRemovePiece = (id: string) => {
+    if (editingPieceId === id) {
+      handleCancelEditPiece();
+    }
     const updated = pieces.filter((p) => p.id !== id);
     setPieces(updated);
     if (updated.length > 0) {
@@ -208,6 +411,7 @@ export const CutOrderManager: React.FC<Props> = ({
   const handleClearAllPieces = () => {
     setPieces([]);
     setSolutions([]);
+    setEditingPieceId(null);
   };
 
   // Predefinir valores rápidos de peças
@@ -350,12 +554,27 @@ export const CutOrderManager: React.FC<Props> = ({
 
   return (
     <div className="space-y-6" id="cut-order-manager-view">
+      {/* Toast de Notificação */}
+      {notificationToast && (
+        <div className="fixed top-20 right-6 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-2xl border border-slate-700 text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-top-4 duration-200">
+          <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+          <span>{notificationToast}</span>
+        </div>
+      )}
+
       {/* Cabeçalho da Ordem de Corte (Geometric Balance) */}
       <header className="flex flex-wrap items-end justify-between gap-4 pb-2">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-black text-slate-900 uppercase tracking-tight">
-            Plano de Corte Recomendado
-          </h1>
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 uppercase tracking-tight">
+              Plano de Corte Recomendado
+            </h1>
+            {currentOrderId && (
+              <span className="text-[10px] font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full font-bold">
+                Editando Plano Salvo
+              </span>
+            )}
+          </div>
           <p className="text-slate-500 text-sm">
             {selectedSolution
               ? `Solução Otimizada: Prioridade em ${
@@ -365,28 +584,61 @@ export const CutOrderManager: React.FC<Props> = ({
                     ? 'Menor Número de Chapas'
                     : 'Máximo Rendimento (%)'
                 }`
-              : 'Configure as peças e execute a otimização matemática 2D'}
+              : 'Configure as peças, use IA para ler croquis e execute a otimização matemática 2D'}
           </p>
         </div>
 
-        {/* Métricas Topo */}
-        {selectedSolution && (
-          <div className="flex items-center gap-4 bg-white border border-slate-200 px-4 py-2 rounded-xl shadow-sm">
-            <div className="text-right">
-              <div className="text-2xl font-mono font-bold text-emerald-600">
-                {selectedSolution.yieldPercentage}%
+        {/* Ações de Gestão de Planos & Métricas Topo */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <button
+            type="button"
+            onClick={handleNewPlan}
+            className="px-3 py-2 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+            title="Iniciar novo plano em branco"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Novo Plano</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsSavedPlansModalOpen(true)}
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-900 border border-slate-300 rounded-xl text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+            title="Abrir lista de planos de corte salvos"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-blue-600" />
+            <span>Planos Salvos ({savedOrders.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSavePlanForLater}
+            disabled={pieces.length === 0}
+            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1.5 active:scale-95"
+            title="Salvar rascunho deste plano de corte para continuar o trabalho depois"
+          >
+            <Save className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Salvar Plano (Continuar Depois)</span>
+          </button>
+
+          {selectedSolution && (
+            <div className="flex items-center gap-3 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl shadow-sm ml-1">
+              <div className="text-right">
+                <div className="text-xl font-mono font-bold text-emerald-600 leading-tight">
+                  {selectedSolution.yieldPercentage}%
+                </div>
+                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Eficiência</div>
               </div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Eficiência</div>
-            </div>
-            <div className="h-10 w-px bg-slate-200 mx-1"></div>
-            <div className="text-right text-slate-900">
-              <div className="text-2xl font-mono font-bold">
-                {GeometryService.formatAreaM2(selectedSolution.totalWasteAreaMm2)}
+              <div className="h-8 w-px bg-slate-200"></div>
+              <div className="text-right text-slate-900">
+                <div className="text-xl font-mono font-bold leading-tight">
+                  {GeometryService.formatAreaM2(selectedSolution.totalWasteAreaMm2)}
+                </div>
+                <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Desperdício</div>
               </div>
-              <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Desperdício</div>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {/* Grid Principal: Painel Esquerdo (Peças/Entrada) e Painel Direito (Diagramas de Corte) */}
@@ -585,12 +837,25 @@ export const CutOrderManager: React.FC<Props> = ({
 
           {/* Lista de Peças Cadastradas (Geometric Balance Style) */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                Peças da Ordem ({pieces.length})
-              </h2>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-2">
+              <div>
+                <h2 className="text-xs font-bold text-slate-900 uppercase tracking-widest flex items-center gap-2">
+                  <span>Peças da Ordem ({pieces.length})</span>
+                </h2>
+              </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* Botão de Câmera / Foto IA Vision */}
+                <button
+                  type="button"
+                  onClick={() => setIsPhotoModalOpen(true)}
+                  className="flex items-center gap-1.5 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 px-3 py-1.5 rounded-lg shadow-sm transition-all active:scale-95"
+                  title="Fotografar croqui, anotação ou projeto de calha para a IA ler, calcular desenvolvimento e inserir na lista"
+                >
+                  <Camera className="w-3.5 h-3.5 text-yellow-300" />
+                  <span>Ler Foto / Croqui (IA)</span>
+                </button>
+
                 {hasLongPieces && (
                   <button
                     type="button"
@@ -610,42 +875,57 @@ export const CutOrderManager: React.FC<Props> = ({
                     className="text-[10px] text-slate-400 hover:text-red-600 font-bold px-2 py-1 rounded hover:bg-red-50 transition-colors"
                     title="Limpar todas as peças da lista"
                   >
-                    Limpar Lista
+                    Limpar
                   </button>
                 )}
               </div>
             </div>
 
             {pieces.length === 0 ? (
-              <div className="text-center py-6 text-slate-400 text-xs">
-                Nenhuma peça adicionada. Preencha o formulário abaixo.
+              <div className="text-center py-8 text-slate-400 text-xs space-y-3">
+                <p>Nenhuma peça adicionada ainda.</p>
+                <div className="flex justify-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setIsPhotoModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg text-xs font-bold transition-colors border border-blue-200"
+                  >
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Tirar Foto de Croqui / Anotação</span>
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+              <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
                 {pieces.map((piece) => {
                   const isTrapezoid = piece.devStart !== piece.devEnd;
                   const isExceeding = piece.length > settings.maxCutLength;
+                  const isBeingEdited = editingPieceId === piece.id;
 
                   return (
                     <div
                       key={piece.id}
                       className={`p-3 rounded-lg border flex items-center justify-between transition-all ${
-                        isTrapezoid
-                          ? 'bg-blue-50/70 border-blue-200'
-                          : 'bg-slate-50 border-slate-200'
+                        isBeingEdited
+                          ? 'bg-blue-100/90 border-blue-500 ring-2 ring-blue-400 shadow-sm'
+                          : isTrapezoid
+                          ? 'bg-blue-50/70 border-blue-200 hover:border-blue-300'
+                          : 'bg-slate-50 border-slate-200 hover:border-slate-300'
                       }`}
                     >
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-slate-900">{piece.name}</span>
+                      <div className="space-y-1 flex-1 min-w-0 pr-2">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-xs text-slate-900 truncate">{piece.name}</span>
                           <span
                             className={`text-[10px] px-1.5 py-0.5 rounded font-mono font-bold ${
-                              isTrapezoid
+                              isBeingEdited
+                                ? 'bg-blue-600 text-white'
+                                : isTrapezoid
                                 ? 'bg-blue-200 text-blue-800'
                                 : 'bg-slate-200 text-slate-700'
                             }`}
                           >
-                            {piece.quantity} unid.
+                            {isBeingEdited ? 'EDITANDO' : `${piece.quantity} unid.`}
                           </span>
                           {isExceeding && (
                             <span className="text-[10px] bg-red-100 text-red-700 px-1 py-0.2 rounded font-bold">
@@ -654,7 +934,7 @@ export const CutOrderManager: React.FC<Props> = ({
                           )}
                         </div>
 
-                        <div className="text-xs text-slate-500 font-mono">
+                        <div className="text-xs text-slate-500 font-mono flex items-center flex-wrap gap-x-2">
                           {isTrapezoid ? (
                             <span className="text-blue-700 font-semibold italic">
                               {piece.devStart} &gt; {piece.devEnd} mm (Var) × {piece.length} mm
@@ -664,19 +944,36 @@ export const CutOrderManager: React.FC<Props> = ({
                               {piece.devStart} × {piece.length} mm
                             </span>
                           )}
-                          <span className="text-slate-400 ml-2">
+                          <span className="text-slate-400">
                             • {piece.material} ({piece.thickness})
                           </span>
                         </div>
                       </div>
 
-                      <button
-                        onClick={() => handleRemovePiece(piece.id)}
-                        className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                        title="Remover peça"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {/* Botões de Ação na Peça (Editar + Excluir) */}
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditPiece(piece)}
+                          className={`p-1.5 rounded-lg transition-colors ${
+                            isBeingEdited
+                              ? 'bg-blue-600 text-white'
+                              : 'text-slate-500 hover:text-blue-600 hover:bg-blue-50'
+                          }`}
+                          title="Editar medidas e propriedades desta peça"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleRemovePiece(piece.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                          title="Remover peça da lista"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -684,15 +981,35 @@ export const CutOrderManager: React.FC<Props> = ({
             )}
           </div>
 
-          {/* Formulário de Inclusão de Peça */}
+          {/* Formulário de Inclusão ou Edição de Peça */}
           <form
-            onSubmit={handleAddPiece}
-            className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-4"
+            id="piece-input-form"
+            onSubmit={handleAddOrSavePiece}
+            className={`border rounded-xl p-5 shadow-sm space-y-4 transition-all ${
+              editingPieceId
+                ? 'bg-blue-50/60 border-blue-400 ring-2 ring-blue-400/30'
+                : 'bg-white border-slate-200'
+            }`}
           >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                + Adicionar Peça
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-widest flex items-center gap-1.5">
+                  {editingPieceId ? (
+                    <>
+                      <Pencil className="w-3.5 h-3.5 text-blue-600" />
+                      <span className="text-blue-700">Editar Peça Selecionada</span>
+                    </>
+                  ) : (
+                    <span>+ Adicionar Nova Peça</span>
+                  )}
+                </h3>
+                {editingPieceId && (
+                  <span className="text-[10px] bg-blue-200 text-blue-800 font-bold px-2 py-0.5 rounded">
+                    Modo Edição
+                  </span>
+                )}
+              </div>
+
               <div className="flex items-center gap-1">
                 {(['mm', 'cm', 'm'] as UnitType[]).map((u) => (
                   <button
@@ -735,10 +1052,10 @@ export const CutOrderManager: React.FC<Props> = ({
                 <label className="text-[11px] font-bold text-slate-600 block mb-1">Nome da Peça:</label>
                 <input
                   type="text"
-                  placeholder="Ex: Calha Frontal Beiral"
+                  placeholder="Ex: Calha Moldura Platibanda"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 font-medium"
                 />
               </div>
 
@@ -862,7 +1179,7 @@ export const CutOrderManager: React.FC<Props> = ({
                 <select
                   value={newMaterial}
                   onChange={(e) => setNewMaterial(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 px-3 py-2 rounded-lg focus:outline-none"
+                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 px-3 py-2 rounded-lg focus:outline-none font-medium"
                 >
                   <option value="Galvanizado">Galvanizado</option>
                   <option value="Galvalume">Galvalume</option>
@@ -872,13 +1189,39 @@ export const CutOrderManager: React.FC<Props> = ({
               </div>
             </div>
 
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Inserir Peça na Lista</span>
-            </button>
+            {/* Botões de Ação do Formulário */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                type="submit"
+                className={`flex-1 py-2.5 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2 ${
+                  editingPieceId
+                    ? 'bg-blue-600 hover:bg-blue-500'
+                    : 'bg-slate-900 hover:bg-slate-800'
+                }`}
+              >
+                {editingPieceId ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Salvar Alterações da Peça</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    <span>Inserir Peça na Lista</span>
+                  </>
+                )}
+              </button>
+
+              {editingPieceId && (
+                <button
+                  type="button"
+                  onClick={handleCancelEditPiece}
+                  className="px-4 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold uppercase tracking-wider rounded-lg transition-colors"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
           </form>
 
           {/* Botões de Ação de Cálculo */}
@@ -1268,6 +1611,25 @@ export const CutOrderManager: React.FC<Props> = ({
           )}
         </div>
       </div>
+
+      {/* Modal de Importação com Leitura de Foto / Croqui por IA Vision */}
+      <PhotoImportModal
+        isOpen={isPhotoModalOpen}
+        onClose={() => setIsPhotoModalOpen(false)}
+        onImportPieces={handleImportPiecesFromPhoto}
+      />
+
+      {/* Modal de Gestão de Planos de Corte Salvos (Continuar Depois) */}
+      <SavedPlansModal
+        isOpen={isSavedPlansModalOpen}
+        onClose={() => setIsSavedPlansModalOpen(false)}
+        savedOrders={savedOrders}
+        currentOrderId={currentOrderId}
+        onLoadOrder={handleLoadSavedPlan}
+        onDeleteOrder={handleDeleteSavedPlan}
+        onDuplicateOrder={handleDuplicateSavedPlan}
+        onNewOrder={handleNewPlan}
+      />
     </div>
   );
 };

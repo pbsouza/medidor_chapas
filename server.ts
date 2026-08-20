@@ -101,19 +101,20 @@ app.post("/api/ai/analyze-media", async (req, res) => {
     const ai = getAiClient();
 
     const prompt = `Você é um especialista em corte de chapas metálicas, funilaria e calhas.
-Analise o documento/imagem fornecido (que pode ser foto de projeto, anotação manual, orçamento, PDF de desenho técnico ou lista de corte).
+Analise a imagem/foto ou documento fornecido (foto de anotação de prancheta, croqui de calha/rufo desenhado à mão com medidas de dobras, projeto ou lista de corte).
 
-Sua tarefa é extrair TODAS as peças que precisam ser fabricadas com suas medidas de desenvolvimento (largura da chapa esticada) e comprimento.
+Sua tarefa é extrair TODAS as peças que precisam ser fabricadas com suas medidas de desenvolvimento (largura da chapa esticada em mm) e comprimento (mm).
 
-REGRAS RÍGIDAS:
-1. DESENVOLVIMENTO (largura do corte em mm): É a largura da chapa necessária para dobrar a peça (ex: 300mm, 400mm, 600mm, 800mm, 1000mm). Se houver medidas em cm ou m, CONVERTA PARA MILÍMETROS (ex: 60cm = 600mm, 3m = 3000mm).
-2. Se a peça tiver desenvolvimento variável (trapezoidal), identifique devStart e devEnd (ex: 400mm para 350mm). Se for constante, devStart e devEnd devem ter o mesmo valor.
-3. COMPRIMENTO (comprimento da chapa em mm): Ex: 3 metros = 3000mm.
-4. QUANTIDADE: Número de peças requeridas.
-5. TIPO DE PEÇA: calha, rufo, pingadeira, colarinho, contra_rufo, perfil, ou outro.
-6. CONFIANÇA (0.0 a 1.0): NUNCA invente medidas. Se uma cota estiver ilegível ou ambígua, marque confiança baixa (< 0.7) e adicione um aviso em "warnings".
-7. MATERIAL: Se especificado (Galvanizado, Galvalume, Inox, Alumínio, etc.), caso contrário informe "".
-8. ESPESSURA: Se especificada (ex: 0.43, 0.50, 0.65 mm), caso contrário informe "".
+CÁLCULO CRÍTICO DE DESENVOLVIMENTO:
+1. SE A IMAGEM FOR UM CROQUI COM DOBRAS/ABAS (ex: calha U ou moldura com abas cotadas como: aba A=2cm, B=15cm, C=10cm, D=15cm, E=2cm):
+   - Some todas as abas e dobras para obter o DESENVOLVIMENTO TOTAL em milímetros (ex: 20 + 150 + 100 + 150 + 20 = 440 mm).
+   - Indique nas observações (notes) o cálculo realizado (ex: "Soma das abas 2+15+10+15+2cm = 44cm").
+2. Se as medidas estiverem em centímetros (cm) ou metros (m), CONVERTA SEMPRE PARA MILÍMETROS (ex: 50cm = 500mm; 3,00m = 3000mm).
+3. Se a peça tiver desenvolvimento variável (trapezoidal/funil), identifique devStart e devEnd (ex: 400mm no início e 300mm no final). Se for constante, devStart e devEnd devem ser iguais.
+4. COMPRIMENTO: Comprimento da barra ou lance em mm (ex: 3m = 3000mm, 6m = 6000mm). Se não estiver explícito no desenho, assuma 3000mm (padrão de calha) e informe em notes.
+5. QUANTIDADE: Quantidade de peças requeridas (padrão 1 se não especificado).
+6. TIPO DE PEÇA: calha, rufo, pingadeira, colarinho, contra_rufo, perfil, ou outro.
+7. MATERIAL / ESPESSURA: Galvanizado, Galvalume, Inox, Alumínio, 0.43mm, 0.50mm, etc., se identificados.
 
 Informações contextuais fornecidas pelo usuário: "${hints || "Nenhuma informação extra"}".
 

@@ -64,6 +64,62 @@ export class GeometryService {
   }
 
   /**
+   * Calcula área geométrica exata de um retalho (retangular, trapezoidal ou triangular)
+   */
+  static calculateScrapAreaMm2(scrap: { width: number; widthEnd?: number; length: number }): number {
+    const w1 = scrap.width || 0;
+    const w2 = scrap.widthEnd !== undefined ? scrap.widthEnd : scrap.width;
+    const avgWidth = (w1 + w2) / 2;
+    return avgWidth * (scrap.length || 0);
+  }
+
+  /**
+   * Identifica o tipo de forma geométrica do retalho
+   */
+  static getScrapShapeType(scrap: {
+    width: number;
+    widthEnd?: number;
+    shapeType?: string;
+    isTrapezoid?: boolean;
+  }): 'retangular' | 'trapezio' | 'triangulo' {
+    if (scrap.shapeType === 'triangulo') return 'triangulo';
+    if (scrap.shapeType === 'trapezio') return 'trapezio';
+    if (scrap.shapeType === 'retangular') return 'retangular';
+
+    if (scrap.widthEnd !== undefined) {
+      if (scrap.widthEnd === 0) return 'triangulo';
+      if (Math.abs(scrap.width - scrap.widthEnd) > 1) return 'trapezio';
+    }
+
+    if (scrap.isTrapezoid) return 'trapezio';
+    return 'retangular';
+  }
+
+  /**
+   * Formata as dimensões completas do retalho para exibição
+   */
+  static formatScrapDimensions(
+    scrap: { width: number; widthEnd?: number; length: number; shapeType?: string; isTrapezoid?: boolean },
+    unit: UnitType = 'mm'
+  ): string {
+    const shape = this.getScrapShapeType(scrap);
+    const L = this.formatMm(scrap.length, unit);
+    const W1 = this.formatMm(scrap.width, unit);
+
+    if (shape === 'triangulo') {
+      const W2 = this.formatMm(scrap.widthEnd !== undefined ? scrap.widthEnd : 0, unit);
+      return `${W1} → ${W2} × ${L} (Triangular / Cunha)`;
+    }
+
+    if (shape === 'trapezio') {
+      const W2 = this.formatMm(scrap.widthEnd !== undefined ? scrap.widthEnd : scrap.width, unit);
+      return `${W1} → ${W2} × ${L} (Trapézio)`;
+    }
+
+    return `${W1} × ${L}`;
+  }
+
+  /**
    * Calcula área geométrica exata de uma peça (retangular ou trapezoidal)
    */
   static calculatePieceAreaMm2(piece: { devStart: number; devEnd: number; length: number }): number {
@@ -195,5 +251,79 @@ export class GeometryService {
    */
   static splitLongPiece(piece: CutPiece, maxMachineLength: number = 7000, overlapMm: number = 100): CutPiece[] {
     return this.suggestSegmentSplit(piece, maxMachineLength, overlapMm);
+  }
+
+  /**
+   * Calcula vértices exatos do polígono (SVG points) e centroide para qualquer peça trapezoidal,
+   * garantindo renderização correta e precisa tanto na posição normal quanto invertida 180°.
+   */
+  static getTrapezoidGeometry(piece: {
+    x: number;
+    y: number;
+    length: number;
+    devStart: number;
+    devEnd: number;
+    isFlipped?: boolean;
+    polygonPoints?: string;
+  }): {
+    points: string;
+    centroidX: number;
+    centroidY: number;
+    vertices: { x: number; y: number }[];
+  } {
+    const x = piece.x || 0;
+    const y = piece.y || 0;
+    const L = piece.length || 0;
+    const d1 = piece.devStart || 0;
+    const d2 = piece.devEnd || 0;
+    const maxDev = Math.max(d1, d2);
+
+    let vertices: { x: number; y: number }[];
+
+    // Se já houver polygonPoints explícito definido da otimização e a peça não foi deslocada
+    if (piece.polygonPoints && piece.polygonPoints.trim()) {
+      const raw = piece.polygonPoints.trim().split(/\s+/);
+      if (raw.length >= 3) {
+        const parsed = raw.map((c) => {
+          const [vx, vy] = c.split(',').map(Number);
+          return { x: vx, y: vy };
+        });
+        if (!parsed.some((p) => isNaN(p.x) || isNaN(p.y))) {
+          vertices = parsed;
+        }
+      }
+    }
+
+    if (!vertices!) {
+      if (piece.isFlipped) {
+        // Invertida 180º (borda inferior plana alinhada na base da tira/chapa, corte diagonal no topo)
+        const yBottom = y + maxDev;
+        vertices = [
+          { x: x, y: yBottom - d2 },
+          { x: x + L, y: yBottom - d1 },
+          { x: x + L, y: yBottom },
+          { x: x, y: yBottom },
+        ];
+      } else {
+        // Posição normal (borda superior plana em y, corte diagonal na base)
+        vertices = [
+          { x: x, y: y },
+          { x: x + L, y: y },
+          { x: x + L, y: y + d2 },
+          { x: x, y: y + d1 },
+        ];
+      }
+    }
+
+    const points = vertices.map((v) => `${Math.round(v.x * 10) / 10},${Math.round(v.y * 10) / 10}`).join(' ');
+    const centroidX = vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length;
+    const centroidY = vertices.reduce((sum, v) => sum + v.y, 0) / vertices.length;
+
+    return {
+      points,
+      centroidX,
+      centroidY,
+      vertices,
+    };
   }
 }

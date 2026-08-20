@@ -50,10 +50,14 @@ export const QrCodeModal: React.FC<Props> = ({ isOpen, onClose, scrap }) => {
             <div className="space-y-1.5 flex-1">
               <div>
                 <span className="text-[10px] uppercase font-bold text-slate-500 block">
-                  Dimensões Exatas:
+                  {scrap.widthEnd !== undefined && scrap.widthEnd !== scrap.width
+                    ? scrap.widthEnd === 0
+                      ? 'Dimensões (Triangular / Cunha):'
+                      : 'Dimensões (Trapezoidal):'
+                    : 'Dimensões Exatas:'}
                 </span>
                 <span className="text-lg font-black font-mono text-slate-950">
-                  {scrap.width} × {scrap.length} mm
+                  {GeometryService.formatScrapDimensions(scrap, 'mm')}
                 </span>
               </div>
 
@@ -105,7 +109,7 @@ export const QrCodeModal: React.FC<Props> = ({ isOpen, onClose, scrap }) => {
           </div>
 
           <div className="mt-3 pt-2 border-t border-slate-300 text-[9px] text-slate-500 text-center font-mono">
-            Cadastrado em: {new Date(scrap.createdAt).toLocaleDateString('pt-BR')} • {GeometryService.formatAreaM2(scrap.width * scrap.length)}
+            Cadastrado em: {new Date(scrap.createdAt).toLocaleDateString('pt-BR')} • {GeometryService.formatAreaM2(GeometryService.calculateScrapAreaMm2(scrap))}
           </div>
         </div>
 

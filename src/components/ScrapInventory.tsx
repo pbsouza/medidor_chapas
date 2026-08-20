@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ScrapItem, UnitType } from '../types';
+import { ScrapItem, ScrapShapeType, UnitType } from '../types';
 import { GeometryService } from '../services/GeometryService';
 import { StorageService } from '../services/StorageService';
 import {
@@ -10,10 +10,12 @@ import {
   QrCode,
   MapPin,
   Search,
-  CheckCircle2,
   X,
   AlertOctagon,
-  Minus,
+  Square,
+  Triangle,
+  Layers,
+  HelpCircle,
 } from 'lucide-react';
 
 interface Props {
@@ -33,14 +35,17 @@ export const ScrapInventory: React.FC<Props> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'todos' | 'disponivel' | 'utilizado'>('disponivel');
+  const [filterShape, setFilterShape] = useState<'todos' | 'retangular' | 'trapezio' | 'triangulo'>('todos');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingScrapId, setEditingScrapId] = useState<string | null>(null);
   const [scrapToDelete, setScrapToDelete] = useState<ScrapItem | null>(null);
 
   // Formulário
+  const [shapeType, setShapeType] = useState<ScrapShapeType>('retangular');
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [width, setWidth] = useState<string | number>(600);
+  const [widthEnd, setWidthEnd] = useState<string | number>(600);
   const [length, setLength] = useState<string | number>(1200);
   const [quantity, setQuantity] = useState<string | number>(1);
   const [material, setMaterial] = useState('Galvanizado');
@@ -58,18 +63,23 @@ export const ScrapInventory: React.FC<Props> = ({
   };
 
   const filteredScraps = scraps.filter((s) => {
+    const sShape = s.shapeType || GeometryService.getScrapShapeType(s);
     const matchesSearch =
       s.code.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (s.location && s.location.toLowerCase().includes(searchTerm.toLowerCase()));
+      (s.name && s.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (s.location && s.location.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      s.material.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'todos' || s.status === filterStatus;
-    return matchesSearch && matchesStatus;
+    const matchesShape = filterShape === 'todos' || sShape === filterShape;
+    return matchesSearch && matchesStatus && matchesShape;
   });
 
   const resetForm = () => {
+    setShapeType('retangular');
     setCode('');
     setName('');
     setWidth(600);
+    setWidthEnd(600);
     setLength(1200);
     setQuantity(1);
     setMaterial('Galvanizado');
@@ -81,10 +91,13 @@ export const ScrapInventory: React.FC<Props> = ({
   };
 
   const handleOpenEdit = (scrap: ScrapItem) => {
+    const shape = scrap.shapeType || GeometryService.getScrapShapeType(scrap);
     setEditingScrapId(scrap.id);
+    setShapeType(shape);
     setCode(scrap.code);
-    setName(scrap.name);
+    setName(scrap.name || '');
     setWidth(scrap.width);
+    setWidthEnd(scrap.widthEnd !== undefined ? scrap.widthEnd : scrap.width);
     setLength(scrap.length);
     setQuantity(scrap.quantity);
     setMaterial(scrap.material);
@@ -94,20 +107,26 @@ export const ScrapInventory: React.FC<Props> = ({
     setIsFormOpen(true);
   };
 
+  const handleSelectShape = (newShape: ScrapShapeType) => {
+    setShapeType(newShape);
+    const currentW = parseNumInput(width, 600);
+    if (newShape === 'retangular') {
+      setWidthEnd(currentW);
+    } else if (newShape === 'triangulo') {
+      setWidthEnd(0);
+    } else if (newShape === 'trapezio') {
+      const curEnd = parseNumInput(widthEnd, 0);
+      if (curEnd === 0 || curEnd === currentW) {
+        setWidthEnd(Math.round(currentW * 0.5) || 200);
+      }
+    }
+  };
+
   const confirmDelete = () => {
     if (scrapToDelete) {
       onDeleteScrap(scrapToDelete.id);
       setScrapToDelete(null);
     }
-  };
-
-  const handleQuickQuantity = (scrap: ScrapItem, delta: number) => {
-    const newQty = Math.max(0, (scrap.quantity || 0) + delta);
-    onUpdateScrap({
-      ...scrap,
-      quantity: newQty,
-      status: newQty > 0 ? 'disponivel' : 'utilizado',
-    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -118,6 +137,15 @@ export const ScrapInventory: React.FC<Props> = ({
 
     const widthMm = GeometryService.convertToMm(widthVal, inputUnit);
     const lengthMm = GeometryService.convertToMm(lengthVal, inputUnit);
+    let widthEndMm = widthMm;
+
+    if (shapeType === 'triangulo') {
+      widthEndMm = 0;
+    } else if (shapeType === 'trapezio') {
+      const widthEndVal = parseNumInput(widthEnd, 0);
+      widthEndMm = GeometryService.convertToMm(widthEndVal, inputUnit);
+    }
+
     const scrapCode = code || StorageService.getNextScrapCode();
 
     if (widthMm <= 0 || lengthMm <= 0) {
@@ -125,35 +153,48 @@ export const ScrapInventory: React.FC<Props> = ({
       return;
     }
 
+    if (shapeType === 'trapezio' && widthEndMm === widthMm) {
+      alert('Para retalhos trapezoidais, o desenvolvimento final (L2) deve ser diferente do inicial (L1). Se forem iguais, selecione o formato Retangular.');
+      return;
+    }
+
+    const isTrapezoid = shapeType !== 'retangular';
+
+    let defaultName = `Retalho ${scrapCode}`;
+    if (shapeType === 'triangulo') {
+      defaultName = `Sobra Triangular ${scrapCode}`;
+    } else if (shapeType === 'trapezio') {
+      defaultName = `Sobra Trapezoidal ${scrapCode}`;
+    }
+
+    const scrapData: Omit<ScrapItem, 'id' | 'createdAt'> = {
+      code: scrapCode,
+      name: name || defaultName,
+      width: widthMm,
+      widthEnd: widthEndMm,
+      isTrapezoid,
+      shapeType,
+      length: lengthMm,
+      quantity: Math.max(1, quantityVal),
+      material,
+      thickness,
+      status: 'disponivel',
+      location,
+      notes,
+    };
+
     if (editingScrapId) {
       const existing = scraps.find((s) => s.id === editingScrapId);
       if (existing) {
         onUpdateScrap({
           ...existing,
-          code: scrapCode,
-          name: name || `Retalho ${scrapCode}`,
-          width: widthMm,
-          length: lengthMm,
-          quantity: quantityVal,
-          material,
-          thickness,
-          location,
-          notes,
+          ...scrapData,
+          id: existing.id,
+          createdAt: existing.createdAt,
         });
       }
     } else {
-      onAddScrap({
-        code: scrapCode,
-        name: name || `Retalho ${scrapCode}`,
-        width: widthMm,
-        length: lengthMm,
-        quantity: Math.max(1, quantityVal),
-        material,
-        thickness,
-        status: 'disponivel',
-        location,
-        notes,
-      });
+      onAddScrap(scrapData);
     }
 
     resetForm();
@@ -168,7 +209,7 @@ export const ScrapInventory: React.FC<Props> = ({
             Retalhos & Sobras de Chapa
           </h1>
           <p className="text-slate-500 text-sm">
-            Sobras identificadas (R001, R002...) com reaproveitamento prioritário nas ordens de corte
+            Cadastre sobras retangulares, trapezoidais e triangulares (cunha / termina em zero) para reaproveitamento prioritário
           </p>
         </div>
 
@@ -185,7 +226,7 @@ export const ScrapInventory: React.FC<Props> = ({
           className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold uppercase tracking-wider rounded-lg shadow-md shadow-amber-900/30 transition-all active:scale-95 cursor-pointer"
         >
           {isFormOpen && !editingScrapId ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
-          <span>{isFormOpen && !editingScrapId ? 'Fechar Cadastro' : '+ Cadastrar Retalho'}</span>
+          <span>{isFormOpen && !editingScrapId ? 'Fechar Cadastro' : '+ Cadastrar Retalho / Sobra'}</span>
         </button>
       </header>
 
@@ -208,7 +249,7 @@ export const ScrapInventory: React.FC<Props> = ({
                 {scrapToDelete.code} - {scrapToDelete.name}
               </div>
               <div className="text-slate-600">
-                Dimensões: <strong>{scrapToDelete.width} × {scrapToDelete.length} mm</strong> | Qtd: <strong>{scrapToDelete.quantity} un</strong>
+                Dimensões: <strong>{GeometryService.formatScrapDimensions(scrapToDelete, 'mm')}</strong> | Qtd: <strong>{scrapToDelete.quantity} un</strong>
               </div>
               <div className="text-slate-500">Material: {scrapToDelete.material} ({scrapToDelete.thickness})</div>
             </div>
@@ -234,16 +275,16 @@ export const ScrapInventory: React.FC<Props> = ({
         </div>
       )}
 
-      {/* Formulário de Cadastro / Edição */}
+      {/* Formulário de Cadastro / Edição com Formatos Geométricos */}
       {isFormOpen && (
         <form
           onSubmit={handleSubmit}
-          className="bg-white border-2 border-amber-400 rounded-xl p-5 sm:p-6 shadow-lg space-y-4 animate-in fade-in duration-150"
+          className="bg-white border-2 border-amber-400 rounded-xl p-5 sm:p-6 shadow-lg space-y-5 animate-in fade-in duration-150"
         >
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-widest flex items-center gap-2">
               <Recycle className="w-4 h-4 text-amber-600" />
-              {editingScrapId ? 'Editar Retalho' : 'Cadastrar Nova Sobra de Chapa'}
+              {editingScrapId ? 'Editar Retalho / Sobra' : 'Cadastrar Nova Sobra de Chapa'}
             </h3>
             <div className="flex items-center gap-1">
               {(['mm', 'cm', 'm'] as UnitType[]).map((u) => (
@@ -263,6 +304,68 @@ export const ScrapInventory: React.FC<Props> = ({
             </div>
           </div>
 
+          {/* Seleção do Formato do Retalho: Retangular, Trapezoidal ou Triangular */}
+          <div>
+            <label className="text-xs font-bold text-slate-700 block mb-2">
+              Formato Geométrico da Sobra:
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleSelectShape('retangular')}
+                className={`flex items-center gap-2.5 p-3 rounded-lg border-2 text-left transition-all cursor-pointer ${
+                  shapeType === 'retangular'
+                    ? 'border-amber-500 bg-amber-50/50 text-slate-900 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-slate-50/50'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-md bg-white border border-slate-200 flex items-center justify-center shrink-0 text-slate-700">
+                  <Square className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold">Retangular</div>
+                  <div className="text-[10px] text-slate-400">Largura uniforme constante</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectShape('trapezio')}
+                className={`flex items-center gap-2.5 p-3 rounded-lg border-2 text-left transition-all cursor-pointer ${
+                  shapeType === 'trapezio'
+                    ? 'border-amber-500 bg-amber-50/50 text-slate-900 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-slate-50/50'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-md bg-white border border-slate-200 flex items-center justify-center shrink-0 text-amber-700">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold">Trapezoidal</div>
+                  <div className="text-[10px] text-slate-400">Medida inicial ≠ final (L1 ≠ L2)</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectShape('triangulo')}
+                className={`flex items-center gap-2.5 p-3 rounded-lg border-2 text-left transition-all cursor-pointer ${
+                  shapeType === 'triangulo'
+                    ? 'border-amber-500 bg-amber-50/50 text-slate-900 shadow-xs'
+                    : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-slate-50/50'
+                }`}
+              >
+                <div className="w-8 h-8 rounded-md bg-white border border-slate-200 flex items-center justify-center shrink-0 text-amber-700">
+                  <Triangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold">Triangular (Cunha)</div>
+                  <div className="text-[10px] text-slate-400">Começa com medida e termina em 0</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="text-xs font-bold text-slate-600 block mb-1">Código Identificador:</label>
@@ -279,16 +382,25 @@ export const ScrapInventory: React.FC<Props> = ({
               <label className="text-xs font-bold text-slate-600 block mb-1">Identificação / Nome:</label>
               <input
                 type="text"
-                placeholder="Ex: Sobra Calha Platibanda"
+                placeholder={
+                  shapeType === 'triangulo'
+                    ? 'Ex: Sobra Triangular Cunha Calha'
+                    : shapeType === 'trapezio'
+                    ? 'Ex: Sobra Trapezoidal Rufo Inclinado'
+                    : 'Ex: Sobra Calha Platibanda'
+                }
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500"
               />
             </div>
 
+            {/* Medida Inicial L1 */}
             <div>
               <label className="text-xs font-bold text-slate-600 block mb-1">
-                Desenvolvimento ({inputUnit}):
+                {shapeType === 'retangular'
+                  ? `Desenvolvimento / Largura (${inputUnit}):`
+                  : `Desenvolvimento Inicial L1 (${inputUnit}):`}
               </label>
               <input
                 type="number"
@@ -297,10 +409,45 @@ export const ScrapInventory: React.FC<Props> = ({
                 placeholder="0"
                 value={width}
                 onFocus={(e) => e.target.select()}
-                onChange={(e) => setWidth(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setWidth(val);
+                  if (shapeType === 'retangular') {
+                    setWidthEnd(val);
+                  }
+                }}
                 className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 focus:bg-white"
               />
             </div>
+
+            {/* Medida Final L2 (quando Trapezoidal ou Triangular) */}
+            {shapeType !== 'retangular' && (
+              <div>
+                <label className="text-xs font-bold text-slate-600 block mb-1 flex items-center justify-between">
+                  <span>Desenvolvimento Final L2 ({inputUnit}):</span>
+                  {shapeType === 'triangulo' && (
+                    <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">
+                      Cunha (0 {inputUnit})
+                    </span>
+                  )}
+                </label>
+                <input
+                  type="number"
+                  step="any"
+                  required
+                  placeholder="0"
+                  value={shapeType === 'triangulo' ? 0 : widthEnd}
+                  disabled={shapeType === 'triangulo'}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setWidthEnd(e.target.value)}
+                  className={`w-full border text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none ${
+                    shapeType === 'triangulo'
+                      ? 'bg-amber-50/60 border-amber-200 text-amber-900 cursor-not-allowed'
+                      : 'bg-slate-50 border-slate-200 focus:border-amber-500 focus:bg-white'
+                  }`}
+                />
+              </div>
+            )}
 
             <div>
               <label className="text-xs font-bold text-slate-600 block mb-1">
@@ -343,6 +490,8 @@ export const ScrapInventory: React.FC<Props> = ({
                 <option value="Galvalume">Galvalume</option>
                 <option value="Alumínio">Alumínio</option>
                 <option value="Inox">Inox</option>
+                <option value="Cobre">Cobre</option>
+                <option value="Pintura Eletrostática">Pintura Eletrostática</option>
               </select>
             </div>
 
@@ -373,6 +522,25 @@ export const ScrapInventory: React.FC<Props> = ({
             </div>
           </div>
 
+          {/* Dica geométrica explicativa */}
+          {shapeType === 'triangulo' && (
+            <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-900 flex items-start gap-2">
+              <HelpCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>Sobra Triangular (Cunha):</strong> Começa na largura L1 (ex: {width || 500} {inputUnit}) e afunila continuamente até 0 {inputUnit} na ponta ao longo do comprimento de {length || 1200} {inputUnit}. A área é calculada como <em>(L1 × Comprimento) / 2</em>.
+              </div>
+            </div>
+          )}
+
+          {shapeType === 'trapezio' && (
+            <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-xs text-blue-900 flex items-start gap-2">
+              <HelpCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>Sobra Trapezoidal:</strong> Possui corte diagonal com larguras desiguais (L1 = {width || 600} {inputUnit} e L2 = {widthEnd || 200} {inputUnit}). O sistema calcula o encaixe geométrico ideal para calhas e rufos inclinados.
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
             <button
               type="button"
@@ -385,41 +553,83 @@ export const ScrapInventory: React.FC<Props> = ({
               type="submit"
               className="px-6 py-2.5 bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold rounded-lg shadow-sm cursor-pointer"
             >
-              {editingScrapId ? 'Salvar Alterações' : 'Salvar Retalho'}
+              {editingScrapId ? 'Salvar Alterações' : 'Salvar Retalho / Sobra'}
             </button>
           </div>
         </form>
       )}
 
-      {/* Barra de Filtro e Pesquisa */}
+      {/* Barra de Filtro, Formato e Pesquisa */}
       <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
         <div className="flex items-center gap-2 flex-1 max-w-sm">
           <Search className="w-4 h-4 text-slate-400" />
           <input
             type="text"
-            placeholder="Buscar por código, nome ou prateleira..."
+            placeholder="Buscar por código, nome, material ou prateleira..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full bg-transparent text-xs text-slate-900 placeholder-slate-400 focus:outline-none"
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium">Status:</span>
-          <div className="flex bg-slate-100 p-1 rounded-lg">
-            {(['todos', 'disponivel', 'utilizado'] as const).map((st) => (
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Filtro por Formato */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400 font-medium">Formato:</span>
+            <div className="flex bg-slate-100 p-1 rounded-lg">
               <button
-                key={st}
-                onClick={() => setFilterStatus(st)}
-                className={`px-3 py-1 text-xs font-bold rounded-md capitalize transition-colors cursor-pointer ${
-                  filterStatus === st
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'text-slate-500 hover:text-slate-900'
+                onClick={() => setFilterShape('todos')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                  filterShape === 'todos' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
                 }`}
               >
-                {st === 'disponivel' ? 'Disponíveis' : st === 'utilizado' ? 'Utilizados' : 'Todos'}
+                Todos
               </button>
-            ))}
+              <button
+                onClick={() => setFilterShape('retangular')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                  filterShape === 'retangular' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Retangulares
+              </button>
+              <button
+                onClick={() => setFilterShape('trapezio')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                  filterShape === 'trapezio' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Trapézios
+              </button>
+              <button
+                onClick={() => setFilterShape('triangulo')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+                  filterShape === 'triangulo' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                Triangulares
+              </button>
+            </div>
+          </div>
+
+          {/* Filtro por Status */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400 font-medium">Status:</span>
+            <div className="flex bg-slate-100 p-1 rounded-lg">
+              {(['todos', 'disponivel', 'utilizado'] as const).map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setFilterStatus(st)}
+                  className={`px-3 py-1 text-xs font-bold rounded-md capitalize transition-colors cursor-pointer ${
+                    filterStatus === st
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-500 hover:text-slate-900'
+                  }`}
+                >
+                  {st === 'disponivel' ? 'Disponíveis' : st === 'utilizado' ? 'Utilizados' : 'Todos'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -431,13 +641,17 @@ export const ScrapInventory: React.FC<Props> = ({
             <Recycle className="w-10 h-10 text-slate-300 mx-auto mb-2" />
             <h4 className="text-sm font-bold text-slate-700">Nenhum retalho encontrado</h4>
             <p className="text-xs text-slate-400 mt-1">
-              Cadastre sobras reaproveitáveis ou gere sobras automáticas ao cortar ordens.
+              Cadastre sobras retangulares, trapezoidais ou triangulares para reaproveitamento nas ordens de corte.
             </p>
           </div>
         ) : (
           filteredScraps.map((scrap) => {
-            const areaM2 = (scrap.width * scrap.length) / 1_000_000;
+            const areaMm2 = GeometryService.calculateScrapAreaMm2(scrap);
+            const areaM2 = areaMm2 / 1_000_000;
             const isAvailable = scrap.status === 'disponivel' && scrap.quantity > 0;
+            const shape = scrap.shapeType || GeometryService.getScrapShapeType(scrap);
+            const w1 = scrap.width;
+            const w2 = scrap.widthEnd !== undefined ? scrap.widthEnd : scrap.width;
 
             return (
               <div
@@ -450,9 +664,29 @@ export const ScrapInventory: React.FC<Props> = ({
               >
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs font-black font-mono px-2 py-0.5 bg-amber-500 text-white rounded shadow-xs">
-                      {scrap.code}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-black font-mono px-2 py-0.5 bg-amber-500 text-white rounded shadow-xs">
+                        {scrap.code}
+                      </span>
+                      {shape === 'triangulo' && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 bg-orange-100 text-orange-800 rounded border border-orange-200 flex items-center gap-1">
+                          <Triangle className="w-2.5 h-2.5" />
+                          <span>Triangular</span>
+                        </span>
+                      )}
+                      {shape === 'trapezio' && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded border border-blue-200 flex items-center gap-1">
+                          <Layers className="w-2.5 h-2.5" />
+                          <span>Trapezoidal</span>
+                        </span>
+                      )}
+                      {shape === 'retangular' && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 bg-slate-100 text-slate-700 rounded border border-slate-200 flex items-center gap-1">
+                          <Square className="w-2.5 h-2.5" />
+                          <span>Retangular</span>
+                        </span>
+                      )}
+                    </div>
                     <span
                       className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${
                         isAvailable
@@ -466,18 +700,37 @@ export const ScrapInventory: React.FC<Props> = ({
 
                   <h3 className="text-base font-bold text-slate-900">{scrap.name}</h3>
 
-                  <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between font-mono text-xs">
-                    <div>
+                  {/* Card Visual com Miniatura do Formato e Dimensões */}
+                  <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between font-mono text-xs gap-3">
+                    <div className="flex-1">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                        Dimensões
+                        {shape === 'triangulo'
+                          ? 'Cunha (L1 → 0 × L)'
+                          : shape === 'trapezio'
+                          ? 'Trapézio (L1 → L2 × L)'
+                          : 'Dimensões (L × C)'}
                       </span>
-                      <span className="text-slate-900 font-bold">
-                        {scrap.width} × {scrap.length} mm
+                      <span className="text-slate-900 font-bold block">
+                        {GeometryService.formatScrapDimensions(scrap, 'mm')}
                       </span>
                     </div>
-                    <div className="text-right">
+
+                    {/* Miniatura Gráfica SVG do Formato do Retalho */}
+                    <div className="w-14 h-10 bg-white border border-slate-200 rounded p-1 flex items-center justify-center shrink-0">
+                      <svg viewBox="0 0 50 30" className="w-full h-full">
+                        {shape === 'triangulo' ? (
+                          <polygon points="5,5 45,15 5,25" fill="#fed7aa" stroke="#f97316" strokeWidth="1.5" />
+                        ) : shape === 'trapezio' ? (
+                          <polygon points="5,3 45,9 45,21 5,27" fill="#dbeafe" stroke="#3b82f6" strokeWidth="1.5" />
+                        ) : (
+                          <rect x="5" y="5" width="40" height="20" fill="#fef3c7" stroke="#f59e0b" strokeWidth="1.5" />
+                        )}
+                      </svg>
+                    </div>
+
+                    <div className="text-right shrink-0">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                        Área Unit.
+                        Área Real
                       </span>
                       <span className="text-slate-700 font-semibold">{areaM2.toFixed(2)} m²</span>
                     </div>

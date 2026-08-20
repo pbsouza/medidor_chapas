@@ -218,12 +218,25 @@ export default function App() {
         }
       }
 
-      // 3. Cadastra novas sobras úteis geradas no corte
+      // 3. Cadastra novas sobras úteis geradas no corte (retangulares, trapezoidais e triangulares)
       for (const remnant of plan.remnants.filter((r) => r.isUsable)) {
+        const isTrap = !!remnant.isTrapezoid || (remnant.widthEnd !== undefined && remnant.widthEnd !== remnant.width);
+        const shapeType = remnant.shapeType || (isTrap ? (remnant.widthEnd === 0 ? 'triangulo' : 'trapezio') : 'retangular');
+        
+        let scrapName = `Sobra ${remnant.width}×${remnant.length}mm (de ${plan.sheetName})`;
+        if (shapeType === 'triangulo') {
+          scrapName = `Sobra Triangular ${remnant.width}→0×${remnant.length}mm (de ${plan.sheetName})`;
+        } else if (shapeType === 'trapezio') {
+          scrapName = `Sobra Trapezoidal ${remnant.width}→${remnant.widthEnd || 0}×${remnant.length}mm (de ${plan.sheetName})`;
+        }
+
         await FirebaseStorageService.saveScrap({
           code: remnant.code,
-          name: `Sobra ${remnant.width}×${remnant.length}mm (de ${plan.sheetName})`,
+          name: scrapName,
           width: remnant.width,
+          widthEnd: remnant.widthEnd !== undefined ? remnant.widthEnd : remnant.width,
+          isTrapezoid: isTrap,
+          shapeType,
           length: remnant.length,
           quantity: 1,
           material: plan.material,

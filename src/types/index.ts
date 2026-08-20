@@ -47,11 +47,16 @@ export interface SheetItem {
   createdAt: string;
 }
 
+export type ScrapShapeType = 'retangular' | 'trapezio' | 'triangulo';
+
 export interface ScrapItem {
   id: string;
   code: string; // Ex: R001, R002
   name?: string;
-  width: number; // Desenvolvimento em mm
+  width: number; // Desenvolvimento inicial / maior em mm
+  widthEnd?: number; // Desenvolvimento final em mm (igual a width se retangular, menor que width se trapezoidal, 0 se triangular)
+  isTrapezoid?: boolean;
+  shapeType?: ScrapShapeType;
   length: number; // Comprimento em mm
   quantity: number;
   material: MaterialType | string;
@@ -134,6 +139,10 @@ export interface RemnantArea {
   y: number;
   length: number;
   width: number;
+  widthEnd?: number;
+  isTrapezoid?: boolean;
+  shapeType?: ScrapShapeType;
+  polygonPoints?: string;
   isUsable: boolean; // Se dimensões >= scrapMinLength e scrapMinWidth
   areaMm2: number;
 }
@@ -151,6 +160,8 @@ export interface SheetCutPlan {
   sheetCode: string;
   sheetName: string;
   isScrap: boolean;
+  isTrapezoidScrap?: boolean;
+  scrapWidthEnd?: number;
   isCoilCut?: boolean; // Se foi cortada sob medida de uma bobina/rolo
   coilCutLengthMm?: number; // Metragem exata a ser desenrolada e cortada da bobina
   coilSourceId?: string;

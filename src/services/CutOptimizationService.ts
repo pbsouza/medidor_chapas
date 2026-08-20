@@ -7,6 +7,7 @@ import {
   PriorityMode,
   RemnantArea,
   ScrapItem,
+  ScrapShapeType,
   SheetCutPlan,
   SheetItem,
 } from '../types';
@@ -18,6 +19,8 @@ interface StockCandidate {
   name: string;
   isScrap: boolean;
   width: number;
+  widthEnd?: number;
+  isTrapezoid?: boolean;
   length: number;
   material: string;
   thickness: string;
@@ -136,15 +139,17 @@ export class CutOptimizationService {
     const primaryMaterial = expandedPieces[0]?.material || 'Galvanizado';
     const primaryThickness = expandedPieces[0]?.thickness || '0.50mm';
 
-    // Estoque de retalhos disponíveis cadastrados pelo usuário
+    // Estoque de retalhos disponíveis cadastrados pelo usuário (retangulares, trapezoidais e triangulares)
     const userScraps: StockCandidate[] = scraps
       .filter((s) => s.status === 'disponivel' && s.quantity > 0)
       .map((s) => ({
         id: s.id,
         code: s.code || `RET-${s.id.slice(0, 4)}`,
-        name: `Retalho ${s.code || ''} (${s.width} × ${s.length} mm)`,
+        name: s.name || `Retalho ${s.code || ''} (${GeometryService.formatScrapDimensions(s)})`,
         isScrap: true,
         width: s.width,
+        widthEnd: s.widthEnd,
+        isTrapezoid: s.isTrapezoid || (s.widthEnd !== undefined && s.widthEnd !== s.width),
         length: s.length,
         material: s.material,
         thickness: s.thickness,
@@ -461,6 +466,8 @@ export class CutOptimizationService {
     const usedPieceIndices = new Set<number>();
     let cutStepCounter = 1;
     const cutSteps: CutStep[] = [];
+    const remnants: RemnantArea[] = [];
+    let remnantCounter = 1;
 
     let currentY = margin;
 
@@ -536,7 +543,7 @@ export class CutOptimizationService {
               pieceName: p2.name,
               pieceType: p2.type,
               x: currentX,
-              y: currentY + p1.devStart,
+              y: currentY + stripWidth - Math.max(p2.devStart, p2.devEnd),
               length: trapLength,
               devStart: p2.devStart,
               devEnd: p2.devEnd,
@@ -546,7 +553,7 @@ export class CutOptimizationService {
               colorIndex: (placed.length % 6) + 2,
               polygonPoints: polyB,
               trapezoidPairName: p1.name,
-              trapezoidDiagonalGuide: `Invertida para encaixe 100% sem perda`,
+              trapezoidDiagonalGuide: `Invertida 180° para encaixe perfeito sem desperdício`,
             });
 
             cutSteps.push({
@@ -594,6 +601,10 @@ export class CutOptimizationService {
       // Coloca a peça na tira na posição X inicial
       let currentX = margin;
 
+      const pPoly = p.isTrapezoid
+        ? `${currentX},${currentY} ${currentX + p.length},${currentY} ${currentX + p.length},${currentY + p.devEnd} ${currentX},${currentY + p.devStart}`
+        : undefined;
+
       placed.push({
         pieceId: p.instanceId,
         pieceName: p.name,
@@ -607,7 +618,51 @@ export class CutOptimizationService {
         isFlipped: false,
         cutIndex: placed.length + 1,
         colorIndex: (placed.length % 6) + 1,
+        polygonPoints: pPoly,
       });
+
+      // Se a peça for trapezoidal isolada, gera a sobra trapezoidal/triangular complementar nesta tira!
+      if (p.isTrapezoid) {
+        const remLeft = stripWidth - p.devStart;
+        const remRight = stripWidth - p.devEnd;
+        const remW1 = Math.max(remLeft, remRight);
+        const remW2 = Math.min(remLeft, remRight);
+        const remArea = ((remLeft + remRight) / 2) * p.length;
+        const isUsable = remW1 >= settings.scrapMinWidth && p.length >= settings.scrapMinLength;
+        const remShape: ScrapShapeType = remW2 === 0 ? 'triangulo' : 'trapezio';
+        const remPoly = `${currentX},${currentY + p.devStart} ${currentX + p.length},${currentY + p.devEnd} ${currentX + p.length},${currentY + stripWidth} ${currentX},${currentY + stripWidth}`;
+
+        if (remW1 > 0) {
+          remnants.push({
+            id: `rem_${stock.id}_trap_${remnantCounter++}`,
+            code: isUsable
+              ? remShape === 'triangulo'
+                ? `SOBRA-TRI-${remW1}`
+                : `SOBRA-TRAP-${remW1}x${remW2}`
+              : remShape === 'triangulo'
+              ? `APARA-TRI-${remW1}`
+              : `APARA-TRAP-${remW1}x${remW2}`,
+            x: currentX,
+            y: currentY + Math.min(p.devStart, p.devEnd),
+            length: p.length,
+            width: remW1,
+            widthEnd: remW2,
+            isTrapezoid: true,
+            shapeType: remShape,
+            polygonPoints: remPoly,
+            isUsable,
+            areaMm2: remArea,
+          });
+
+          cutSteps.push({
+            step: cutStepCounter++,
+            type: 'corte_diagonal_trapezio',
+            description: `✂️ CORTE DIAGONAL: Cortar tira de ${stripWidth} mm de ${p.devStart} mm na esquerda para ${p.devEnd} mm na direita. Sobra ${remShape === 'triangulo' ? 'triangular (cunha)' : 'trapezoidal'} de ${remW1}→${remW2} × ${p.length} mm gerada para estoque.`,
+            positionMm: currentY,
+            dimensionMm: p.length,
+          });
+        }
+      }
 
       cutSteps.push({
         step: cutStepCounter++,
@@ -639,6 +694,10 @@ export class CutOptimizationService {
         const subP = availablePieces[subIdx];
         usedPieceIndices.add(subIdx);
 
+        const subPoly = subP.isTrapezoid
+          ? `${currentX},${currentY} ${currentX + subP.length},${currentY} ${currentX + subP.length},${currentY + subP.devEnd} ${currentX},${currentY + subP.devStart}`
+          : undefined;
+
         placed.push({
           pieceId: subP.instanceId,
           pieceName: subP.name,
@@ -652,7 +711,42 @@ export class CutOptimizationService {
           isFlipped: false,
           cutIndex: placed.length + 1,
           colorIndex: (placed.length % 6) + 1,
+          polygonPoints: subPoly,
         });
+
+        if (subP.isTrapezoid) {
+          const remLeft = stripWidth - subP.devStart;
+          const remRight = stripWidth - subP.devEnd;
+          const remW1 = Math.max(remLeft, remRight);
+          const remW2 = Math.min(remLeft, remRight);
+          const remArea = ((remLeft + remRight) / 2) * subP.length;
+          const isUsable = remW1 >= settings.scrapMinWidth && subP.length >= settings.scrapMinLength;
+          const remShape: ScrapShapeType = remW2 === 0 ? 'triangulo' : 'trapezio';
+          const remPoly = `${currentX},${currentY + subP.devStart} ${currentX + subP.length},${currentY + subP.devEnd} ${currentX + subP.length},${currentY + stripWidth} ${currentX},${currentY + stripWidth}`;
+
+          if (remW1 > 0) {
+            remnants.push({
+              id: `rem_${stock.id}_trap_${remnantCounter++}`,
+              code: isUsable
+                ? remShape === 'triangulo'
+                  ? `SOBRA-TRI-${remW1}`
+                  : `SOBRA-TRAP-${remW1}x${remW2}`
+                : remShape === 'triangulo'
+                ? `APARA-TRI-${remW1}`
+                : `APARA-TRAP-${remW1}x${remW2}`,
+              x: currentX,
+              y: currentY + Math.min(subP.devStart, subP.devEnd),
+              length: subP.length,
+              width: remW1,
+              widthEnd: remW2,
+              isTrapezoid: true,
+              shapeType: remShape,
+              polygonPoints: remPoly,
+              isUsable,
+              areaMm2: remArea,
+            });
+          }
+        }
 
         cutSteps.push({
           step: cutStepCounter++,
@@ -663,6 +757,25 @@ export class CutOptimizationService {
         });
 
         currentX += subP.length + kerf;
+      }
+
+      // Sobra no final do comprimento desta tira
+      const stripRemainingX = effectiveL - margin - currentX;
+      if (stripRemainingX >= 50) {
+        const isUsable = stripWidth >= settings.scrapMinWidth && stripRemainingX >= settings.scrapMinLength;
+        remnants.push({
+          id: `rem_${stock.id}_end_${remnantCounter++}`,
+          code: isUsable ? `SOBRA-L${stripWidth}x${Math.round(stripRemainingX)}` : `APARA-L${stripWidth}x${Math.round(stripRemainingX)}`,
+          x: currentX,
+          y: currentY,
+          length: Math.round(stripRemainingX),
+          width: stripWidth,
+          widthEnd: stripWidth,
+          isTrapezoid: false,
+          shapeType: 'retangular',
+          isUsable,
+          areaMm2: stripWidth * stripRemainingX,
+        });
       }
 
       cutSteps.push({
@@ -705,9 +818,6 @@ export class CutOptimizationService {
 
     const totalAreaMm2 = sheetW * effectivePlanLength;
 
-    const remnants: RemnantArea[] = [];
-    let remnantCounter = 1;
-
     // Sobra lateral na largura
     const unusedY = sheetW - currentY;
     if (unusedY > 0) {
@@ -719,6 +829,9 @@ export class CutOptimizationService {
         y: currentY,
         length: effectivePlanLength,
         width: unusedY,
+        widthEnd: unusedY,
+        isTrapezoid: false,
+        shapeType: 'retangular',
         isUsable,
         areaMm2: unusedY * effectivePlanLength,
       });
@@ -741,9 +854,11 @@ export class CutOptimizationService {
     return {
       sheetId: stock.id,
       sheetCode: stock.code,
-      sheetName: effectivePlanName,
-      isScrap: false,
-      isCoilCut: true,
+      sheetName: stock.isScrap ? (stock.name || `Retalho ${stock.code}`) : effectivePlanName,
+      isScrap: !!stock.isScrap,
+      isTrapezoidScrap: !!stock.isTrapezoid,
+      scrapWidthEnd: stock.widthEnd,
+      isCoilCut: !stock.isScrap && !stock.isStandardCommercial ? false : !stock.isScrap,
       coilCutLengthMm: effectivePlanLength,
       coilSourceId: stock.id,
       width: sheetW,

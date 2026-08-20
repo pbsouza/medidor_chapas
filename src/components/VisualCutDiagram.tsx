@@ -182,6 +182,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
       return {
         ...p,
         isFlipped: !p.isFlipped,
+        polygonPoints: undefined,
       };
     });
     applyPiecesUpdate(updated);
@@ -685,53 +686,68 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               />
 
               {/* Sobras e Retalhos Identificados */}
-              {currentPlan.remnants.map((r, rIdx) => (
-                <g key={`rem-${r.id}-${rIdx}`}>
-                  <rect
-                    x={r.x}
-                    y={r.y}
-                    width={r.length}
-                    height={r.width}
-                    fill={r.isUsable ? `url(#gb-scrap-${index})` : `url(#gb-waste-${index})`}
-                    stroke={r.isUsable ? '#d97706' : '#ef4444'}
-                    strokeWidth="1.5"
-                    strokeDasharray={r.isUsable ? '6,3' : '4,2'}
-                  />
-                  {r.length > 300 && r.width > 80 && (
-                    <text
-                      x={r.x + r.length / 2}
-                      y={r.y + r.width / 2 + 5}
-                      fill={r.isUsable ? '#b45309' : '#dc2626'}
-                      fontSize={Math.max(14, Math.min(22, r.width / 4))}
-                      fontWeight="bold"
-                      textAnchor="middle"
-                      className="font-mono select-none uppercase tracking-wider"
-                    >
-                      {r.isUsable ? `♻️ SOBRA: ${r.width}×${r.length}mm (${r.code})` : `APARA: ${r.width}×${r.length}mm`}
-                    </text>
-                  )}
-                </g>
-              ))}
+              {currentPlan.remnants.map((r, rIdx) => {
+                const isTrap = r.isTrapezoid || (r.widthEnd !== undefined && r.widthEnd !== r.width);
+                const shape = r.shapeType || (isTrap ? (r.widthEnd === 0 ? 'triangulo' : 'trapezio') : 'retangular');
+                const labelText = r.isUsable
+                  ? isTrap
+                    ? `♻️ SOBRA ${shape === 'triangulo' ? 'TRI' : 'TRAP'}: ${r.width}→${r.widthEnd || 0}×${r.length}mm`
+                    : `♻️ SOBRA: ${r.width}×${r.length}mm (${r.code})`
+                  : isTrap
+                  ? `APARA ${shape === 'triangulo' ? 'TRI' : 'TRAP'}: ${r.width}→${r.widthEnd || 0}×${r.length}mm`
+                  : `APARA: ${r.width}×${r.length}mm`;
+
+                return (
+                  <g key={`rem-${r.id}-${rIdx}`}>
+                    {r.polygonPoints ? (
+                      <polygon
+                        points={r.polygonPoints}
+                        fill={r.isUsable ? `url(#gb-scrap-${index})` : `url(#gb-waste-${index})`}
+                        stroke={r.isUsable ? '#d97706' : '#ef4444'}
+                        strokeWidth="1.5"
+                        strokeDasharray={r.isUsable ? '6,3' : '4,2'}
+                      />
+                    ) : (
+                      <rect
+                        x={r.x}
+                        y={r.y}
+                        width={r.length}
+                        height={r.width}
+                        fill={r.isUsable ? `url(#gb-scrap-${index})` : `url(#gb-waste-${index})`}
+                        stroke={r.isUsable ? '#d97706' : '#ef4444'}
+                        strokeWidth="1.5"
+                        strokeDasharray={r.isUsable ? '6,3' : '4,2'}
+                      />
+                    )}
+                    {r.length > 250 && r.width > 60 && (
+                      <text
+                        x={r.x + r.length / 2}
+                        y={r.y + (r.widthEnd !== undefined ? (r.width + r.widthEnd) / 4 : r.width / 2) + 5}
+                        fill={r.isUsable ? '#b45309' : '#dc2626'}
+                        fontSize={Math.max(13, Math.min(20, r.width / 4.5))}
+                        fontWeight="bold"
+                        textAnchor="middle"
+                        className="font-mono select-none uppercase tracking-wider"
+                      >
+                        {labelText}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
 
               {/* Peças Posicionadas com Suporte a Drag and Drop & Rotação SVG */}
               {currentPlan.placedPieces.map((p, pIdx) => {
                 const color = PIECE_COLORS[(p.colorIndex || pIdx) % PIECE_COLORS.length];
                 const isSelected = selectedPieceId === p.pieceId;
+                const rot = p.rotation || 0;
                 const isDragging = draggingPieceId === p.pieceId;
                 const isOutOfBounds = isPieceOutOfBounds(p);
 
-                const rot = p.rotation || 0;
-                const centerX = p.x + p.length / 2;
-                const centerY = p.y + (p.devStart + p.devEnd) / 4;
-
-                const transformAttr = rot !== 0 ? `rotate(${rot} ${centerX} ${centerY})` : undefined;
-
                 if (p.isTrapezoid) {
-                  const points = p.isFlipped
-                    ? `${p.x},${p.y + p.devStart} ${p.x + p.length},${p.y + p.devEnd} ${p.x + p.length},${p.y + p.devEnd + (p.devStart)} ${p.x},${p.y + p.devStart + (p.devStart)}`
-                    : p.polygonPoints || `${p.x},${p.y} ${p.x + p.length},${p.y} ${p.x + p.length},${p.y + p.devEnd} ${p.x},${p.y + p.devStart}`;
+                  const geo = GeometryService.getTrapezoidGeometry(p);
+                  const transformAttr = rot !== 0 ? `rotate(${rot} ${geo.centroidX} ${geo.centroidY})` : undefined;
                   const avgHeight = (p.devStart + p.devEnd) / 2;
-                  const textY = p.isFlipped ? p.y + avgHeight * 0.75 + 5 : p.y + avgHeight * 0.45 + 5;
 
                   return (
                     <g
@@ -743,7 +759,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                       }`}
                     >
                       <polygon
-                        points={points}
+                        points={geo.points}
                         fill={color.fill}
                         stroke={isOutOfBounds ? '#ef4444' : isSelected ? '#1e293b' : color.stroke}
                         strokeWidth={isSelected ? 4 : 2}
@@ -752,8 +768,8 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
 
                       {/* Texto de Identificação da Peça */}
                       <text
-                        x={p.x + p.length / 2}
-                        y={textY}
+                        x={geo.centroidX}
+                        y={geo.centroidY + 5}
                         fill={color.text}
                         fontSize={Math.max(12, Math.min(20, avgHeight / 3.5))}
                         fontWeight="bold"
@@ -768,10 +784,14 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                   );
                 }
 
+                const rectCenterX = p.x + p.length / 2;
+                const rectCenterY = p.y + p.devStart / 2;
+                const rectTransformAttr = rot !== 0 ? `rotate(${rot} ${rectCenterX} ${rectCenterY})` : undefined;
+
                 return (
                   <g
                     key={`piece-${p.pieceId}-${pIdx}`}
-                    transform={transformAttr}
+                    transform={rectTransformAttr}
                     onPointerDown={(e) => handlePointerDownPiece(e, p)}
                     className={`transition-opacity ${isManualEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${
                       isDragging ? 'opacity-70' : 'hover:opacity-90'
@@ -894,7 +914,16 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
             <CheckCircle2 className="w-4 h-4 text-amber-600 flex-shrink-0" />
             <div className="text-xs text-amber-900">
               <strong>Sobra Reaproveitável Detectada:</strong> Este corte gerará{' '}
-              {currentPlan.remnants.filter((r) => r.isUsable).map((r) => `${r.width} × ${r.length} mm (${r.code})`).join(', ')}.
+              {currentPlan.remnants
+                .filter((r) => r.isUsable)
+                .map((r) => {
+                  if (r.isTrapezoid || (r.widthEnd !== undefined && r.widthEnd !== r.width)) {
+                    const isTri = r.shapeType === 'triangulo' || r.widthEnd === 0;
+                    return `${isTri ? 'Triangular' : 'Trapezoidal'} ${r.width}→${r.widthEnd || 0} × ${r.length} mm (${r.code})`;
+                  }
+                  return `${r.width} × ${r.length} mm (${r.code})`;
+                })
+                .join(', ')}.
               Ao confirmar a ordem, esses retalhos serão automaticamente integrados ao estoque!
             </div>
           </div>

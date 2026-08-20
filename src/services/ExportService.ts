@@ -208,13 +208,41 @@ export class ExportService {
             doc.setDrawColor(239, 68, 68);
           }
           doc.setLineWidth(0.25);
-          doc.rect(rx, ry, rw, rh, 'FD');
+
+          if (r.polygonPoints) {
+            const rawPts = r.polygonPoints.trim().split(/\s+/).map((pt) => {
+              const [px, py] = pt.split(',').map(Number);
+              return { x: originX + px * scale, y: originY + py * scale };
+            });
+
+            if (rawPts.length >= 3) {
+              const startX = rawPts[0].x;
+              const startY = rawPts[0].y;
+              const lineVectors: [number, number][] = [];
+              for (let i = 1; i < rawPts.length; i++) {
+                lineVectors.push([rawPts[i].x - rawPts[i - 1].x, rawPts[i].y - rawPts[i - 1].y]);
+              }
+              lineVectors.push([rawPts[0].x - rawPts[rawPts.length - 1].x, rawPts[0].y - rawPts[rawPts.length - 1].y]);
+              doc.lines(lineVectors, startX, startY, [1, 1], 'FD', true);
+            } else {
+              doc.rect(rx, ry, rw, rh, 'FD');
+            }
+          } else {
+            doc.rect(rx, ry, rw, rh, 'FD');
+          }
 
           if (rw > 14 && rh > 4) {
             doc.setFontSize(5);
             doc.setFont('helvetica', 'bold');
             doc.setTextColor(r.isUsable ? 180 : 220, r.isUsable ? 83 : 38, r.isUsable ? 9 : 38);
-            const label = r.isUsable ? `SOBRA ${r.width}×${r.length}` : `APARA ${r.width}×${r.length}`;
+            const isTrap = r.isTrapezoid || (r.widthEnd !== undefined && r.widthEnd !== r.width);
+            const label = r.isUsable
+              ? isTrap
+                ? `SOBRA ${r.width}→${r.widthEnd || 0}×${r.length}`
+                : `SOBRA ${r.width}×${r.length}`
+              : isTrap
+              ? `APARA ${r.width}→${r.widthEnd || 0}×${r.length}`
+              : `APARA ${r.width}×${r.length}`;
             doc.text(label, rx + rw / 2 - (label.length * 0.7), ry + rh / 2 + 1.2);
           }
         }
@@ -227,16 +255,13 @@ export class ExportService {
         doc.setDrawColor(color.stroke[0], color.stroke[1], color.stroke[2]);
         doc.setLineWidth(0.35);
 
-        if (p.isTrapezoid && p.polygonPoints) {
+        if (p.isTrapezoid) {
           // Processa vértices exatos do polígono calculados geometricamente
-          const rawCoords = p.polygonPoints.trim().split(/\s+/);
-          const pts = rawCoords.map((coordStr) => {
-            const [xVal, yVal] = coordStr.split(',').map(Number);
-            return {
-              x: originX + xVal * scale,
-              y: originY + yVal * scale,
-            };
-          });
+          const geo = GeometryService.getTrapezoidGeometry(p);
+          const pts = geo.vertices.map((v) => ({
+            x: originX + v.x * scale,
+            y: originY + v.y * scale,
+          }));
 
           if (pts.length >= 3) {
             const startX = pts[0].x;
@@ -250,9 +275,9 @@ export class ExportService {
             doc.lines(lineVectors, startX, startY, [1, 1], 'FD', true);
 
             // Rótulo da Peça Centralizado no Polígono
-            const midX = originX + (p.x + p.length / 2) * scale;
+            const midX = originX + geo.centroidX * scale;
             const avgH = ((p.devStart + p.devEnd) / 2) * scale;
-            const midY = originY + (p.y + avgH / 2) * scale + 1.2;
+            const midY = originY + geo.centroidY * scale + 1.2;
 
             doc.setFontSize(Math.max(5, Math.min(7, avgH * 0.35)));
             doc.setFont('helvetica', 'bold');

@@ -40,14 +40,22 @@ export const ScrapInventory: React.FC<Props> = ({
   // Formulário
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
-  const [width, setWidth] = useState<number>(600);
-  const [length, setLength] = useState<number>(1200);
-  const [quantity, setQuantity] = useState<number>(1);
+  const [width, setWidth] = useState<string | number>(600);
+  const [length, setLength] = useState<string | number>(1200);
+  const [quantity, setQuantity] = useState<string | number>(1);
   const [material, setMaterial] = useState('Galvanizado');
   const [thickness, setThickness] = useState('0.50mm');
   const [location, setLocation] = useState('Prateleira A1');
   const [notes, setNotes] = useState('');
   const [inputUnit, setInputUnit] = useState<UnitType>('mm');
+
+  const parseNumInput = (val: string | number, fallback = 0): number => {
+    if (typeof val === 'number') return isNaN(val) ? fallback : val;
+    if (!val || typeof val !== 'string' || val.trim() === '') return fallback;
+    const clean = val.replace(',', '.');
+    const parsed = parseFloat(clean);
+    return isNaN(parsed) ? fallback : parsed;
+  };
 
   const filteredScraps = scraps.filter((s) => {
     const matchesSearch =
@@ -104,9 +112,18 @@ export const ScrapInventory: React.FC<Props> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const widthMm = GeometryService.convertToMm(width, inputUnit);
-    const lengthMm = GeometryService.convertToMm(length, inputUnit);
+    const widthVal = parseNumInput(width, 0);
+    const lengthVal = parseNumInput(length, 0);
+    const quantityVal = Math.max(0, parseNumInput(quantity, 0));
+
+    const widthMm = GeometryService.convertToMm(widthVal, inputUnit);
+    const lengthMm = GeometryService.convertToMm(lengthVal, inputUnit);
     const scrapCode = code || StorageService.getNextScrapCode();
+
+    if (widthMm <= 0 || lengthMm <= 0) {
+      alert('Informe desenvolvimento e comprimento válidos maiores que zero.');
+      return;
+    }
 
     if (editingScrapId) {
       const existing = scraps.find((s) => s.id === editingScrapId);
@@ -117,7 +134,7 @@ export const ScrapInventory: React.FC<Props> = ({
           name: name || `Retalho ${scrapCode}`,
           width: widthMm,
           length: lengthMm,
-          quantity: Math.max(0, quantity),
+          quantity: quantityVal,
           material,
           thickness,
           location,
@@ -130,7 +147,7 @@ export const ScrapInventory: React.FC<Props> = ({
         name: name || `Retalho ${scrapCode}`,
         width: widthMm,
         length: lengthMm,
-        quantity: Math.max(1, quantity),
+        quantity: Math.max(1, quantityVal),
         material,
         thickness,
         status: 'disponivel',
@@ -277,9 +294,11 @@ export const ScrapInventory: React.FC<Props> = ({
                 type="number"
                 step="any"
                 required
+                placeholder="0"
                 value={width}
-                onChange={(e) => setWidth(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500"
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setWidth(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 focus:bg-white"
               />
             </div>
 
@@ -291,9 +310,11 @@ export const ScrapInventory: React.FC<Props> = ({
                 type="number"
                 step="any"
                 required
+                placeholder="0"
                 value={length}
-                onChange={(e) => setLength(parseFloat(e.target.value) || 0)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500"
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setLength(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 focus:bg-white"
               />
             </div>
 
@@ -303,9 +324,11 @@ export const ScrapInventory: React.FC<Props> = ({
                 type="number"
                 min="0"
                 required
+                placeholder="0"
                 value={quantity}
-                onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 0)}
-                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500"
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-amber-500 focus:bg-white"
               />
             </div>
 

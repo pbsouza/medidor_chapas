@@ -49,15 +49,23 @@ export const SheetInventory: React.FC<Props> = ({
 
   // Campos do Formulário
   const [name, setName] = useState('');
-  const [width, setWidth] = useState<number>(1000);
-  const [length, setLength] = useState<number>(3000);
-  const [quantity, setQuantity] = useState<number>(5);
+  const [width, setWidth] = useState<string | number>(1000);
+  const [length, setLength] = useState<string | number>(3000);
+  const [quantity, setQuantity] = useState<string | number>(5);
   const [material, setMaterial] = useState('Galvanizado');
   const [thickness, setThickness] = useState('0.50mm');
   const [color, setColor] = useState('');
   const [notes, setNotes] = useState('');
   const [isCoil, setIsCoil] = useState(false);
   const [inputUnit, setInputUnit] = useState<UnitType>('mm');
+
+  const parseNumInput = (val: string | number, fallback = 0): number => {
+    if (typeof val === 'number') return isNaN(val) ? fallback : val;
+    if (!val || typeof val !== 'string' || val.trim() === '') return fallback;
+    const clean = val.replace(',', '.');
+    const parsed = parseFloat(clean);
+    return isNaN(parsed) ? fallback : parsed;
+  };
 
   const filteredSheets = sheets.filter((s) => {
     const matchesSearch =
@@ -143,8 +151,17 @@ export const SheetInventory: React.FC<Props> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const widthMm = GeometryService.convertToMm(width, inputUnit);
-    const lengthMm = GeometryService.convertToMm(length, inputUnit);
+    const widthVal = parseNumInput(width, 0);
+    const lengthVal = parseNumInput(length, 0);
+    const quantityVal = Math.max(0, parseNumInput(quantity, 0));
+
+    const widthMm = GeometryService.convertToMm(widthVal, inputUnit);
+    const lengthMm = GeometryService.convertToMm(lengthVal, inputUnit);
+
+    if (widthMm <= 0 || lengthMm <= 0) {
+      alert('Informe desenvolvimento e comprimento válidos maiores que zero.');
+      return;
+    }
 
     if (editingSheetId) {
       const existing = sheets.find((s) => s.id === editingSheetId);
@@ -159,7 +176,7 @@ export const SheetInventory: React.FC<Props> = ({
           width: widthMm,
           length: lengthMm,
           isCoil,
-          quantity: Math.max(0, quantity),
+          quantity: quantityVal,
           material,
           thickness,
           color,
@@ -176,7 +193,7 @@ export const SheetInventory: React.FC<Props> = ({
         width: widthMm,
         length: lengthMm,
         isCoil,
-        quantity: Math.max(1, quantity),
+        quantity: Math.max(1, quantityVal),
         material,
         thickness,
         color,
@@ -372,8 +389,10 @@ export const SheetInventory: React.FC<Props> = ({
                 type="number"
                 step="any"
                 required
+                placeholder="0"
                 value={width}
-                onChange={(e) => setWidth(parseFloat(e.target.value) || 0)}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setWidth(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white"
               />
             </div>
@@ -386,8 +405,10 @@ export const SheetInventory: React.FC<Props> = ({
                 type="number"
                 step="any"
                 required
+                placeholder="0"
                 value={length}
-                onChange={(e) => setLength(parseFloat(e.target.value) || 0)}
+                onFocus={(e) => e.target.select()}
+                onChange={(e) => setLength(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white"
               />
             </div>
@@ -399,7 +420,7 @@ export const SheetInventory: React.FC<Props> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   type="button"
-                  onClick={() => setQuantity((q) => Math.max(0, q - 1))}
+                  onClick={() => setQuantity((q) => Math.max(0, parseNumInput(q, 0) - 1))}
                   className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
                 >
                   -
@@ -408,13 +429,15 @@ export const SheetInventory: React.FC<Props> = ({
                   type="number"
                   min="0"
                   required
+                  placeholder="0"
                   value={quantity}
-                  onChange={(e) => setQuantity(parseInt(e.target.value, 10) || 0)}
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setQuantity(e.target.value)}
                   className="w-full text-center bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white"
                 />
                 <button
                   type="button"
-                  onClick={() => setQuantity((q) => q + 1)}
+                  onClick={() => setQuantity((q) => parseNumInput(q, 0) + 1)}
                   className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-bold cursor-pointer"
                 >
                   +

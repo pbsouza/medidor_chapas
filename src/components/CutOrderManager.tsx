@@ -96,14 +96,23 @@ export const CutOrderManager: React.FC<Props> = ({
   // Input de Nova Peça / Edição
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<PieceType>('calha_platibanda');
-  const [newDevStart, setNewDevStart] = useState<number>(500);
-  const [newDevEnd, setNewDevEnd] = useState<number>(500);
-  const [newLength, setNewLength] = useState<number>(3000);
-  const [newQuantity, setNewQuantity] = useState<number>(1);
+  const [newDevStart, setNewDevStart] = useState<string | number>(500);
+  const [newDevEnd, setNewDevEnd] = useState<string | number>(500);
+  const [newLength, setNewLength] = useState<string | number>(3000);
+  const [newQuantity, setNewQuantity] = useState<string | number>(1);
   const [newMaterial, setNewMaterial] = useState('Galvanizado');
   const [newThickness, setNewThickness] = useState('0.50mm');
   const [inputUnit, setInputUnit] = useState<UnitType>('mm');
   const [isTrapezoidMode, setIsTrapezoidMode] = useState(false);
+
+  // Helper para converter string/number com suporte a vírgula e campo vazio
+  const parseNumInput = (val: string | number, fallback = 0): number => {
+    if (typeof val === 'number') return isNaN(val) ? fallback : val;
+    if (!val || typeof val !== 'string' || val.trim() === '') return fallback;
+    const clean = val.replace(',', '.');
+    const parsed = parseFloat(clean);
+    return isNaN(parsed) ? fallback : parsed;
+  };
 
   // Soluções Calculadas
   const [solutions, setSolutions] = useState<OptimizationSolution[]>([]);
@@ -234,12 +243,17 @@ export const CutOrderManager: React.FC<Props> = ({
   // Adicionar ou Salvar Edição de Peça
   const handleAddOrSavePiece = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    const devStartMm = GeometryService.convertToMm(newDevStart, inputUnit);
-    const devEndMm = isTrapezoidMode ? GeometryService.convertToMm(newDevEnd, inputUnit) : devStartMm;
-    const lengthMm = GeometryService.convertToMm(newLength, inputUnit);
+    const devStartVal = parseNumInput(newDevStart, 0);
+    const devEndVal = isTrapezoidMode ? parseNumInput(newDevEnd, 0) : devStartVal;
+    const lengthVal = parseNumInput(newLength, 0);
+    const quantityVal = Math.max(1, parseNumInput(newQuantity, 1));
+
+    const devStartMm = GeometryService.convertToMm(devStartVal, inputUnit);
+    const devEndMm = GeometryService.convertToMm(devEndVal, inputUnit);
+    const lengthMm = GeometryService.convertToMm(lengthVal, inputUnit);
 
     if (devStartMm <= 0 || lengthMm <= 0) {
-      alert('Informe desenvolvimento e comprimento válidos.');
+      alert('Informe desenvolvimento e comprimento válidos maiores que zero.');
       return;
     }
 
@@ -254,7 +268,7 @@ export const CutOrderManager: React.FC<Props> = ({
               devStart: devStartMm,
               devEnd: devEndMm,
               length: lengthMm,
-              quantity: Math.max(1, newQuantity),
+              quantity: quantityVal,
               material: newMaterial,
               thickness: newThickness,
             }
@@ -274,7 +288,7 @@ export const CutOrderManager: React.FC<Props> = ({
         devStart: devStartMm,
         devEnd: devEndMm,
         length: lengthMm,
-        quantity: Math.max(1, newQuantity),
+        quantity: quantityVal,
         material: newMaterial,
         thickness: newThickness,
       };
@@ -460,12 +474,12 @@ export const CutOrderManager: React.FC<Props> = ({
     let piecesToUse = [...pieces];
 
     // Se o usuário tem valores válidos preenchidos no formulário (ex: digitou 9m e quantidade 11)
-    const formDevStartMm = GeometryService.convertToMm(newDevStart, inputUnit);
-    const formLengthMm = GeometryService.convertToMm(newLength, inputUnit);
+    const formDevStartMm = GeometryService.convertToMm(parseNumInput(newDevStart, 0), inputUnit);
+    const formLengthMm = GeometryService.convertToMm(parseNumInput(newLength, 0), inputUnit);
 
     // Se a lista estiver vazia, adiciona a peça do formulário automaticamente!
     if (piecesToUse.length === 0 && formDevStartMm > 0 && formLengthMm > 0) {
-      const devEndMm = isTrapezoidMode ? GeometryService.convertToMm(newDevEnd, inputUnit) : formDevStartMm;
+      const devEndMm = isTrapezoidMode ? GeometryService.convertToMm(parseNumInput(newDevEnd, 0), inputUnit) : formDevStartMm;
       const piece: CutPiece = {
         id: `p_${Date.now()}`,
         name: newName || `Peça Personalizada (${formLengthMm}mm)`,
@@ -473,7 +487,7 @@ export const CutOrderManager: React.FC<Props> = ({
         devStart: formDevStartMm,
         devEnd: devEndMm,
         length: formLengthMm,
-        quantity: Math.max(1, newQuantity),
+        quantity: Math.max(1, parseNumInput(newQuantity, 1)),
         material: newMaterial,
         thickness: newThickness,
       };
@@ -1086,9 +1100,11 @@ export const CutOrderManager: React.FC<Props> = ({
                   type="number"
                   step="any"
                   required
+                  placeholder="0"
                   value={newDevStart}
-                  onChange={(e) => setNewDevStart(parseFloat(e.target.value) || 0)}
-                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setNewDevStart(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
                 />
               </div>
 
@@ -1101,9 +1117,11 @@ export const CutOrderManager: React.FC<Props> = ({
                     type="number"
                     step="any"
                     required
+                    placeholder="0"
                     value={newDevEnd}
-                    onChange={(e) => setNewDevEnd(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setNewDevEnd(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
                   />
                 </div>
               ) : (
@@ -1115,9 +1133,11 @@ export const CutOrderManager: React.FC<Props> = ({
                     type="number"
                     step="any"
                     required
+                    placeholder="0"
                     value={newLength}
-                    onChange={(e) => setNewLength(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setNewLength(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
                   />
                 </div>
               )}
@@ -1131,16 +1151,18 @@ export const CutOrderManager: React.FC<Props> = ({
                     type="number"
                     step="any"
                     required
+                    placeholder="0"
                     value={newLength}
-                    onChange={(e) => setNewLength(parseFloat(e.target.value) || 0)}
-                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                    onFocus={(e) => e.target.select()}
+                    onChange={(e) => setNewLength(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
                   />
                 </div>
               )}
 
               {/* Aviso dinâmico de divisão com emenda / transpasse para peças > 7m */}
               {(() => {
-                const curLengthMm = GeometryService.convertToMm(newLength, inputUnit);
+                const curLengthMm = GeometryService.convertToMm(parseNumInput(newLength, 0), inputUnit);
                 if (curLengthMm > settings.maxCutLength) {
                   const splice = GeometryService.calculateSpliceDetails(
                     curLengthMm,
@@ -1167,10 +1189,13 @@ export const CutOrderManager: React.FC<Props> = ({
                 <input
                   type="number"
                   min="1"
+                  step="1"
                   required
+                  placeholder="1"
                   value={newQuantity}
-                  onChange={(e) => setNewQuantity(parseInt(e.target.value, 10) || 1)}
-                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500"
+                  onFocus={(e) => e.target.select()}
+                  onChange={(e) => setNewQuantity(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs text-slate-900 font-mono font-bold px-3 py-2 rounded-lg focus:outline-none focus:border-blue-500 focus:bg-white transition-colors"
                 />
               </div>
 

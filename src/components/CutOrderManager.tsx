@@ -541,6 +541,19 @@ export const CutOrderManager: React.FC<Props> = ({
     const updatedPlans = [...selectedSolution.plans];
     updatedPlans[planIndex] = updatedPlan;
 
+    // Recalcula coilCutSuggestions se houver sugestões de rolo
+    let totalLengthCutMeters = 0;
+    const updatedCoilSuggestions = selectedSolution.coilCutSuggestions?.map((sug, idx) => {
+      const matchingPlan = updatedPlans[idx];
+      if (matchingPlan && (matchingPlan.isCoilCut || matchingPlan.stockCategory === 'rolo' || matchingPlan.stockCategory === 'sugestao_compra')) {
+        return {
+          ...sug,
+          cutLengthMm: matchingPlan.length,
+        };
+      }
+      return sug;
+    });
+
     // Recalcula totais da solução com base no ajuste manual
     let totalUsed = 0;
     let totalSheet = 0;
@@ -549,6 +562,9 @@ export const CutOrderManager: React.FC<Props> = ({
       totalUsed += p.usedAreaMm2;
       totalSheet += p.totalAreaMm2;
       totalWaste += p.wasteAreaMm2;
+      if (p.isCoilCut || p.stockCategory === 'rolo' || p.stockCategory === 'sugestao_compra') {
+        totalLengthCutMeters += p.length / 1000;
+      }
     }
     const newYield = totalSheet > 0 ? Math.round((totalUsed / totalSheet) * 1000) / 10 : 0;
 
@@ -557,6 +573,8 @@ export const CutOrderManager: React.FC<Props> = ({
       plans: updatedPlans,
       yieldPercentage: newYield,
       totalWasteAreaMm2: totalWaste,
+      coilCutSuggestions: updatedCoilSuggestions,
+      totalLengthCutMeters: totalLengthCutMeters > 0 ? Math.round(totalLengthCutMeters * 100) / 100 : selectedSolution.totalLengthCutMeters,
     };
 
     const updatedSolutions = [...solutions];
@@ -1044,7 +1062,7 @@ export const CutOrderManager: React.FC<Props> = ({
 
             {/* Presets Rápidos */}
             <div>
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5 whitespace-nowrap">
                 Modelos de Calhas / Rufos:
               </label>
               <div className="flex flex-wrap gap-1.5">
@@ -1053,7 +1071,7 @@ export const CutOrderManager: React.FC<Props> = ({
                     key={idx}
                     type="button"
                     onClick={() => handleSelectPreset(pr)}
-                    className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold rounded-md border border-slate-200 transition-colors"
+                    className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 text-[11px] font-semibold rounded-md border border-slate-200 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                   >
                     {pr.name}
                   </button>
@@ -1359,39 +1377,65 @@ export const CutOrderManager: React.FC<Props> = ({
                       ? `${(sol.lateralWasteMm / 10).toFixed(1)} cm`
                       : 'mínima';
 
+                    const isScrap = sol.stockCategory === 'retalho' || sol.totalScrapsUsed > 0;
+                    const isFlatSheet = sol.stockCategory === 'chapa' || (sol.totalSheetsUsed > 0 && !sol.primaryWidthMm);
+                    const isUserCoil = sol.stockCategory === 'rolo' || (sol.isFromUserStock && !isScrap && !isFlatSheet);
+                    const isBuySuggestion = sol.stockCategory === 'sugestao_compra' || (!sol.isFromUserStock && !isScrap);
+
                     return (
                       <div
                         key={sol.id}
                         onClick={() => setSelectedSolutionIndex(sIdx)}
-                        className={`p-3 rounded-xl border cursor-pointer transition-all flex flex-col justify-between relative ${
+                        className={`p-3.5 rounded-xl border cursor-pointer transition-all flex flex-col justify-between relative ${
                           isSelected
-                            ? 'bg-blue-50 border-2 border-blue-600 shadow-md ring-1 ring-blue-500/30'
+                            ? 'bg-blue-50/90 border-2 border-blue-600 shadow-md ring-1 ring-blue-500/30'
                             : 'bg-white border-slate-200 hover:border-blue-300 hover:shadow-sm'
                         }`}
                       >
                         <div>
-                          <div className="flex items-center justify-between mb-1.5">
-                            <span className={`text-[10px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded ${
-                              sIdx === 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                          <div className="flex items-center justify-between gap-1 mb-2">
+                            <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded whitespace-nowrap inline-flex items-center ${
+                              isScrap
+                                ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : isUserCoil
+                                ? 'bg-indigo-100 text-indigo-900 border border-indigo-300'
+                                : isFlatSheet
+                                ? 'bg-blue-100 text-blue-900 border border-blue-300'
+                                : 'bg-violet-100 text-violet-900 border border-violet-300'
                             }`}>
-                              {sIdx === 0 ? '🥇 Opção 1 (Melhor)' : sIdx === 1 ? '🥈 Opção 2' : sIdx === 2 ? '🥉 Opção 3' : `Opção ${sIdx + 1}`}
+                              {isScrap
+                                ? '♻️ Retalhos'
+                                : isUserCoil
+                                ? '🌀 Rolo Estoque'
+                                : isFlatSheet
+                                ? '📋 Chapa Plana'
+                                : '💡 Sugestão Compra'}
                             </span>
-                            {isSelected && <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>}
+                            {isSelected && <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"></span>}
                           </div>
 
-                          <div className="font-bold text-xs text-slate-900 flex items-center gap-1">
-                            <span>Bobina {primaryWidth}</span>
+                          <div className="font-bold text-xs text-slate-900 truncate">
+                            {isScrap
+                              ? `${sol.totalScrapsUsed} Retalho(s) Usado(s)`
+                              : isFlatSheet
+                              ? `${sol.totalSheetsUsed} Chapa(s) Plana(s)`
+                              : `Bobina ${primaryWidth}`}
                           </div>
 
-                          <div className="text-[11px] text-slate-600 font-mono mt-1 space-y-0.5">
-                            <div>Desenrolar: <strong className="text-slate-900">{meters.toFixed(2)}m</strong></div>
-                            <div>Sobra lateral: <strong className="text-amber-700">{wasteCm}</strong></div>
+                          <div className="text-[11px] text-slate-600 font-mono mt-1.5 space-y-1">
+                            {!isFlatSheet && (
+                              <div className="whitespace-nowrap">Desenrolar: <strong className="text-slate-900 font-bold">{meters.toFixed(2)}m</strong></div>
+                            )}
+                            <div className="whitespace-nowrap">Sobra lateral: <strong className="text-amber-800 font-bold">{wasteCm}</strong></div>
+                            {sol.plans.length > 1 && (
+                              <div className="text-[10px] text-slate-500 font-sans whitespace-nowrap">{sol.plans.length} folha(s) programada(s)</div>
+                            )}
                           </div>
                         </div>
 
-                        <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between">
-                          <span className="text-[10px] uppercase font-bold text-slate-400">Rendimento</span>
-                          <span className={`text-base font-black font-mono ${
+                        <div className="mt-3 pt-2 border-t border-slate-200/80 flex items-center justify-between">
+                          <span className="text-[10px] uppercase font-bold text-slate-400 whitespace-nowrap">Aproveitamento</span>
+                          <span className={`text-base font-black font-mono whitespace-nowrap ${
                             sol.yieldPercentage >= 85 ? 'text-emerald-600' : sol.yieldPercentage >= 70 ? 'text-blue-600' : 'text-slate-700'
                           }`}>
                             {sol.yieldPercentage}%

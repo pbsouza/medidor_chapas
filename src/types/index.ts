@@ -155,6 +155,8 @@ export interface CutStep {
   dimensionMm: number;
 }
 
+export type StockCategory = 'rolo' | 'chapa' | 'retalho' | 'sugestao_compra';
+
 export interface SheetCutPlan {
   sheetId: string;
   sheetCode: string;
@@ -165,6 +167,8 @@ export interface SheetCutPlan {
   isCoilCut?: boolean; // Se foi cortada sob medida de uma bobina/rolo
   coilCutLengthMm?: number; // Metragem exata a ser desenrolada e cortada da bobina
   coilSourceId?: string;
+  stockCategory?: StockCategory;
+  isFromUserStock?: boolean;
   width: number;
   length: number;
   material: MaterialType | string;
@@ -209,6 +213,8 @@ export interface OptimizationSolution {
   totalLengthCutMeters?: number;
   lateralWasteMm?: number;
   summaryTag?: string;
+  stockCategory?: StockCategory;
+  isFromUserStock?: boolean;
   allTestedWidthsComparison?: {
     widthMm: number;
     widthCm: number;
@@ -219,6 +225,7 @@ export interface OptimizationSolution {
     lateralWasteCm: number;
     piecesPlaced: number;
     description: string;
+    isFromStock?: boolean;
   }[];
 }
 

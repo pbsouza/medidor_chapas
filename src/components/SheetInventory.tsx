@@ -28,10 +28,18 @@ interface Props {
 const COMMON_SHEET_PRESETS = [
   { name: '🌀 Bobina Rolo 1200mm × 40m', width: 1200, length: 40000, isCoil: true },
   { name: '🌀 Bobina Rolo 1000mm × 30m', width: 1000, length: 30000, isCoil: true },
-  { name: '1000 × 3000 mm', width: 1000, length: 3000, isCoil: false },
-  { name: '800 × 3000 mm', width: 800, length: 3000, isCoil: false },
-  { name: '600 × 5000 mm', width: 600, length: 5000, isCoil: false },
-  { name: '1200 × 3000 mm', width: 1200, length: 3000, isCoil: false },
+  { name: '🌀 Bobina Rolo 800mm × 30m', width: 800, length: 30000, isCoil: true },
+  { name: '🌀 Bobina Rolo 600mm × 30m', width: 600, length: 30000, isCoil: true },
+  { name: '🌀 Bobina Rolo 500mm × 30m', width: 500, length: 30000, isCoil: true },
+  { name: '🌀 Bobina Rolo 400mm × 30m', width: 400, length: 30000, isCoil: true },
+  { name: '🌀 Bobina Rolo 300mm × 30m', width: 300, length: 30000, isCoil: true },
+  { name: '📋 Chapa 1200 × 3000 mm', width: 1200, length: 3000, isCoil: false },
+  { name: '📋 Chapa 1000 × 3000 mm', width: 1000, length: 3000, isCoil: false },
+  { name: '📋 Chapa 800 × 3000 mm', width: 800, length: 3000, isCoil: false },
+  { name: '📋 Chapa 600 × 3000 mm', width: 600, length: 3000, isCoil: false },
+  { name: '📋 Chapa 500 × 3000 mm', width: 500, length: 3000, isCoil: false },
+  { name: '📋 Chapa 400 × 3000 mm', width: 400, length: 3000, isCoil: false },
+  { name: '📋 Chapa 300 × 3000 mm', width: 300, length: 3000, isCoil: false },
 ];
 
 export const SheetInventory: React.FC<Props> = ({
@@ -42,6 +50,7 @@ export const SheetInventory: React.FC<Props> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMaterial, setFilterMaterial] = useState('todos');
+  const [filterType, setFilterType] = useState<'todos' | 'rolos' | 'chapas'>('todos');
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingSheetId, setEditingSheetId] = useState<string | null>(null);
   const [sheetToDelete, setSheetToDelete] = useState<SheetItem | null>(null);
@@ -67,7 +76,14 @@ export const SheetInventory: React.FC<Props> = ({
     return isNaN(parsed) ? fallback : parsed;
   };
 
+  const totalCoilsCount = sheets.filter((s) => s.isCoil || s.length >= 20000).length;
+  const totalFlatSheetsCount = sheets.filter((s) => !s.isCoil && s.length < 20000).length;
+
   const filteredSheets = sheets.filter((s) => {
+    const isThisCoil = s.isCoil || s.length >= 20000;
+    if (filterType === 'rolos' && !isThisCoil) return false;
+    if (filterType === 'chapas' && isThisCoil) return false;
+
     const matchesSearch =
       s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       s.material.toLowerCase().includes(searchTerm.toLowerCase());
@@ -505,31 +521,76 @@ export const SheetInventory: React.FC<Props> = ({
       )}
 
       {/* Barra de Filtro e Pesquisa */}
-      <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
-        <div className="flex items-center gap-2 flex-1 max-w-sm">
-          <Search className="w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar por nome ou material..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-transparent text-xs text-slate-900 placeholder-slate-400 focus:outline-none"
-          />
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 p-4 rounded-xl shadow-sm">
+        {/* Abas de Categoria */}
+        <div className="flex items-center gap-1.5 p-1 bg-slate-100 rounded-lg shrink-0">
+          <button
+            type="button"
+            onClick={() => setFilterType('todos')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors cursor-pointer ${
+              filterType === 'todos'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            Todos ({sheets.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterType('rolos')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors cursor-pointer flex items-center gap-1.5 ${
+              filterType === 'rolos'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-indigo-800 hover:text-indigo-950'
+            }`}
+          >
+            <span>🌀 Rolos / Bobinas</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${filterType === 'rolos' ? 'bg-indigo-700 text-white' : 'bg-indigo-100 text-indigo-900'}`}>
+              {totalCoilsCount}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setFilterType('chapas')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-md transition-colors cursor-pointer flex items-center gap-1.5 ${
+              filterType === 'chapas'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'text-blue-800 hover:text-blue-950'
+            }`}
+          >
+            <span>📋 Chapas Planas</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full ${filterType === 'chapas' ? 'bg-blue-700 text-white' : 'bg-blue-100 text-blue-900'}`}>
+              {totalFlatSheetsCount}
+            </span>
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400 font-medium">Material:</span>
-          <select
-            value={filterMaterial}
-            onChange={(e) => setFilterMaterial(e.target.value)}
-            className="bg-slate-50 border border-slate-200 text-xs text-slate-700 px-2.5 py-1.5 rounded-lg focus:outline-none font-medium"
-          >
-            <option value="todos">Todos os Materiais</option>
-            <option value="Galvanizado">Galvanizado</option>
-            <option value="Galvalume">Galvalume</option>
-            <option value="Alumínio">Alumínio</option>
-            <option value="Inox">Inox</option>
-          </select>
+        <div className="flex flex-wrap items-center gap-3 flex-1 sm:justify-end">
+          <div className="flex items-center gap-2 flex-1 max-w-xs bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg">
+            <Search className="w-4 h-4 text-slate-400 shrink-0" />
+            <input
+              type="text"
+              placeholder="Buscar por nome..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-transparent text-xs text-slate-900 placeholder-slate-400 focus:outline-none"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-400 font-medium hidden sm:inline">Material:</span>
+            <select
+              value={filterMaterial}
+              onChange={(e) => setFilterMaterial(e.target.value)}
+              className="bg-slate-50 border border-slate-200 text-xs text-slate-700 px-2.5 py-1.5 rounded-lg focus:outline-none font-medium"
+            >
+              <option value="todos">Todos Materiais</option>
+              <option value="Galvanizado">Galvanizado</option>
+              <option value="Galvalume">Galvalume</option>
+              <option value="Alumínio">Alumínio</option>
+              <option value="Inox">Inox</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -569,44 +630,44 @@ export const SheetInventory: React.FC<Props> = ({
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200">
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-200 whitespace-nowrap">
                         {sheet.material} ({sheet.thickness})
                       </span>
                       {(sheet.isCoil || sheet.length >= 20000) && (
-                        <span className="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded border border-indigo-200">
+                        <span className="text-[10px] font-bold uppercase px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded border border-indigo-200 whitespace-nowrap">
                           🌀 Bobina {(sheet.length / 1000).toFixed(0)}m
                         </span>
                       )}
                     </div>
 
                     {isOutOfStock ? (
-                      <span className="text-[11px] font-bold px-2 py-0.5 bg-red-100 text-red-700 rounded flex items-center gap-1 border border-red-200">
+                      <span className="text-[11px] font-bold px-2 py-0.5 bg-red-100 text-red-700 rounded flex items-center gap-1 border border-red-200 whitespace-nowrap shrink-0">
                         <AlertTriangle className="w-3 h-3" />
                         Zerado
                       </span>
                     ) : (
-                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
+                      <span className="text-xs font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200 whitespace-nowrap shrink-0">
                         {sheet.quantity} {sheet.quantity === 1 ? 'unidade' : 'unidades'}
                       </span>
                     )}
                   </div>
 
-                  <h3 className="text-base font-bold text-slate-900">{sheet.name}</h3>
+                  <h3 className="text-base font-bold text-slate-900 truncate" title={sheet.name}>{sheet.name}</h3>
 
-                  <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between font-mono text-xs">
-                    <div>
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                  <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200 flex items-center justify-between font-mono text-xs gap-2">
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block whitespace-nowrap">
                         Dimensões
                       </span>
-                      <span className="text-slate-900 font-bold">
+                      <span className="text-slate-900 font-bold whitespace-nowrap truncate block">
                         {sheet.width} × {sheet.length} mm
                       </span>
                     </div>
-                    <div className="text-right">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block whitespace-nowrap">
                         Área Unit.
                       </span>
-                      <span className="text-slate-700 font-semibold">{areaM2.toFixed(2)} m²</span>
+                      <span className="text-slate-700 font-semibold whitespace-nowrap">{areaM2.toFixed(2)} m²</span>
                     </div>
                   </div>
 

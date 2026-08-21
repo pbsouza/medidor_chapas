@@ -53,6 +53,16 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
   const [sheetRotation, setSheetRotation] = useState<number>(0); // 0, 45, 90, 180
   const [stepSizeMm, setStepSizeMm] = useState<number>(5); // Passo de micro-ajuste: 1, 5, 10, 50mm
 
+  // Se o tamanho da chapa/bobina acompanha automaticamente o ajuste das peças
+  const isCoil = currentPlan.isCoilCut || currentPlan.stockCategory === 'rolo' || currentPlan.stockCategory === 'sugestao_compra';
+  const [autoFitLength, setAutoFitLength] = useState<boolean>(true);
+  const [manualSheetLengthInput, setManualSheetLengthInput] = useState<string>(String(currentPlan.length));
+
+  // Sincroniza input de comprimento se o plano mudar
+  useEffect(() => {
+    setManualSheetLengthInput(String(currentPlan.length));
+  }, [currentPlan.length]);
+
   // Estado de Arraste (Drag and Drop)
   const [draggingPieceId, setDraggingPieceId] = useState<string | null>(null);
   const [dragStartPos, setDragStartPos] = useState<{ x: number; y: number } | null>(null);
@@ -66,14 +76,17 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
   // Peça atualmente selecionada
   const selectedPiece = currentPlan.placedPieces.find((p) => p.pieceId === selectedPieceId);
 
-  // Recalcula áreas, sobras e rendimento quando posições mudam
-  const recalculatePlanMetrics = (updatedPieces: PlacedPiece[]): SheetCutPlan => {
+  // Recalcula áreas, sobras e rendimento quando posições mudam (com tamanho de chapa dinâmico)
+  const recalculatePlanMetrics = (
+    updatedPieces: PlacedPiece[],
+    overrideLength?: number,
+    overrideWidth?: number
+  ): SheetCutPlan => {
     let usedAreaMm2 = 0;
     for (const p of updatedPieces) {
       usedAreaMm2 += GeometryService.calculatePieceAreaMm2(p);
     }
 
-    const totalAreaMm2 = currentPlan.width * currentPlan.length;
     let maxY = 0;
     let maxX = 0;
 
@@ -85,20 +98,37 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
       maxX = Math.max(maxX, p.x + pieceL);
     }
 
+    // Comprimento dinâmico da Chapa / Bobina
+    let newLength = currentPlan.length;
+    if (overrideLength !== undefined && overrideLength > 0) {
+      newLength = overrideLength;
+    } else if (autoFitLength || isCoil) {
+      // Ajusta dinamicamente ao ponto máximo das peças (desenrolar do rolo ou chapa auto-fit)
+      newLength = Math.max(50, Math.ceil(maxX));
+    } else {
+      // Garante que não corta peças se ultrapassarem o tamanho anterior
+      newLength = Math.max(currentPlan.length, Math.ceil(maxX));
+    }
+
+    let newWidth = overrideWidth !== undefined && overrideWidth > 0 ? overrideWidth : currentPlan.width;
+    newWidth = Math.max(newWidth, Math.ceil(maxY));
+
+    const totalAreaMm2 = newWidth * newLength;
+
     // Sobra lateral recalculada
     const remnants: RemnantArea[] = [];
-    const unusedY = Math.max(0, currentPlan.width - maxY);
+    const unusedY = Math.max(0, newWidth - maxY);
     if (unusedY > 0) {
-      const isUsable = unusedY >= 150 && currentPlan.length >= 400;
+      const isUsable = unusedY >= 150 && newLength >= 400;
       remnants.push({
         id: `rem_${currentPlan.sheetId}_manual`,
         code: isUsable ? `SOBRA-L${Math.round(unusedY)}` : `APARA-L${Math.round(unusedY)}`,
         x: 0,
         y: maxY,
-        length: currentPlan.length,
+        length: newLength,
         width: Math.round(unusedY),
         isUsable,
-        areaMm2: Math.round(unusedY * currentPlan.length),
+        areaMm2: Math.round(unusedY * newLength),
       });
     }
 
@@ -110,11 +140,22 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
     const wasteAreaMm2 = Math.max(0, totalAreaMm2 - usedAreaMm2 - usableScrapAreaMm2);
     const yieldPercentage = totalAreaMm2 > 0 ? Math.round((usedAreaMm2 / totalAreaMm2) * 1000) / 10 : 0;
 
+    // Atualiza nome descritivo se for corte de rolo/bobina
+    let sheetName = currentPlan.sheetName;
+    if (isCoil && (sheetName.includes('Desenrolar') || sheetName.includes('Bobina') || sheetName.includes('Rolo'))) {
+      sheetName = `Bobina ${newWidth}mm • Desenrolar ${(newLength / 1000).toFixed(2)}m`;
+    }
+
     const newPlan: SheetCutPlan = {
       ...currentPlan,
+      sheetName,
+      width: newWidth,
+      length: newLength,
+      coilCutLengthMm: isCoil ? newLength : currentPlan.coilCutLengthMm,
       placedPieces: updatedPieces,
       remnants,
       usedAreaMm2: Math.round(usedAreaMm2),
+      totalAreaMm2: Math.round(totalAreaMm2),
       wasteAreaMm2: Math.round(wasteAreaMm2),
       usableScrapAreaMm2: Math.round(usableScrapAreaMm2),
       yieldPercentage,
@@ -123,12 +164,34 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
     return newPlan;
   };
 
-  const applyPiecesUpdate = (updatedPieces: PlacedPiece[]) => {
-    const updatedPlan = recalculatePlanMetrics(updatedPieces);
+  const applyPiecesUpdate = (
+    updatedPieces: PlacedPiece[],
+    overrideLength?: number,
+    overrideWidth?: number
+  ) => {
+    const updatedPlan = recalculatePlanMetrics(updatedPieces, overrideLength, overrideWidth);
     setCurrentPlan(updatedPlan);
     if (onUpdatePlan) {
       onUpdatePlan(updatedPlan);
     }
+  };
+
+  // Ajustar tamanho da chapa diretamente pelo botão ou input
+  const handleApplyCustomSheetLength = (val: number) => {
+    if (val <= 0 || isNaN(val)) return;
+    applyPiecesUpdate(currentPlan.placedPieces, val);
+  };
+
+  // Forçar auto-ajuste imediato da chapa para o limite das peças
+  const handleAutoFitSheetToPieces = () => {
+    let maxX = 0;
+    for (const p of currentPlan.placedPieces) {
+      const pieceDev = Math.max(p.devStart, p.devEnd);
+      const pieceL = (p.rotation === 90 || p.rotation === 270) ? pieceDev : p.length;
+      maxX = Math.max(maxX, p.x + pieceL);
+    }
+    const fitLength = Math.max(50, Math.ceil(maxX));
+    applyPiecesUpdate(currentPlan.placedPieces, fitLength);
   };
 
   // Funções de Micro-Ajuste (Setas)
@@ -235,14 +298,19 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
     return { x: svgPoint.x, y: svgPoint.y };
   };
 
-  // Início do Arraste
+  // Início do Arraste (Mouse & Touch)
   const handlePointerDownPiece = (e: React.PointerEvent, piece: PlacedPiece) => {
     e.stopPropagation();
     setSelectedPieceId(piece.pieceId);
 
     if (!isManualEditMode) return;
 
-    (e.target as Element).setPointerCapture(e.pointerId);
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch (_) {
+      // Ignora erro de pointer capture em navegadores legados
+    }
+
     const coords = getSvgCoordinates(e.clientX, e.clientY);
     if (!coords) return;
 
@@ -251,7 +319,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
     setPieceStartPos({ x: piece.x, y: piece.y });
   };
 
-  // Movimentação do Arraste (com Snap Magnético)
+  // Movimentação do Arraste (com Snap Magnético e suporte a touch)
   const handlePointerMoveCanvas = (e: React.PointerEvent) => {
     if (!draggingPieceId || !dragStartPos || !pieceStartPos || !isManualEditMode) return;
 
@@ -264,7 +332,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
     let targetX = pieceStartPos.x + deltaX;
     let targetY = pieceStartPos.y + deltaY;
 
-    // Snapping Magnético inteligente (10mm das bordas da chapa)
+    // Snapping Magnético inteligente (15mm das bordas da chapa)
     if (Math.abs(targetX) < 15) targetX = 0;
     if (Math.abs(targetY) < 15) targetY = 0;
 
@@ -317,7 +385,19 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
   // Fim do Arraste
   const handlePointerUpCanvas = (e: React.PointerEvent) => {
     if (draggingPieceId) {
+      try {
+        (e.target as Element).releasePointerCapture(e.pointerId);
+      } catch (_) {}
       applyPiecesUpdate(currentPlan.placedPieces);
+      setDraggingPieceId(null);
+      setDragStartPos(null);
+      setPieceStartPos(null);
+    }
+  };
+
+  // Cancelamento de Arraste (ex: troca de app no mobile)
+  const handlePointerCancelCanvas = () => {
+    if (draggingPieceId) {
       setDraggingPieceId(null);
       setDragStartPos(null);
       setPieceStartPos(null);
@@ -334,38 +414,43 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
   return (
     <div
       id={`sheet-plan-card-${currentPlan.sheetId}-${index}`}
-      className="bg-white border-2 border-slate-200 rounded-xl p-4 sm:p-6 shadow-sm mb-6 flex flex-col relative"
+      className="bg-white border-2 border-slate-200 rounded-xl p-4 sm:p-6 shadow-sm mb-6 flex flex-col relative overflow-hidden"
     >
       {/* Cabeçalho da Chapa */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pb-4 mb-3 border-b border-slate-100">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 mb-3 border-b border-slate-100">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 min-w-0">
           <span
-            className={`px-2.5 py-1 text-[10px] font-bold rounded uppercase tracking-wider ${
-              currentPlan.isCoilCut
-                ? 'bg-indigo-100 text-indigo-800 border border-indigo-300 shadow-sm'
-                : currentPlan.isScrap
-                ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                : 'bg-blue-100 text-blue-700 border border-blue-200'
+            className={`inline-flex items-center px-2.5 py-1 text-[10px] font-black rounded uppercase tracking-wider whitespace-nowrap shrink-0 self-start sm:self-auto ${
+              currentPlan.isScrap || currentPlan.stockCategory === 'retalho'
+                ? 'bg-amber-100 text-amber-900 border border-amber-300 shadow-xs'
+                : currentPlan.stockCategory === 'sugestao_compra' || (!currentPlan.isFromUserStock && currentPlan.isCoilCut)
+                ? 'bg-violet-100 text-violet-900 border border-violet-300 shadow-xs'
+                : currentPlan.isCoilCut || currentPlan.stockCategory === 'rolo'
+                ? 'bg-indigo-100 text-indigo-900 border border-indigo-300 shadow-xs'
+                : 'bg-blue-100 text-blue-800 border border-blue-200'
             }`}
           >
-            {currentPlan.isCoilCut
-              ? `🌀 ROLO / BOBINA • DESENROLAR ${(currentPlan.length / 1000).toFixed(2)}m`
-              : currentPlan.isScrap
-              ? '♻️ RETALHO REUTILIZADO'
-              : '▦ CHAPA PRINCIPAL'}
+            {currentPlan.isScrap || currentPlan.stockCategory === 'retalho'
+              ? '♻️ RETALHO DA OFICINA'
+              : currentPlan.stockCategory === 'sugestao_compra'
+              ? `💡 SUGESTÃO DE COMPRA • ${(currentPlan.length / 1000).toFixed(2)}m`
+              : currentPlan.isCoilCut || currentPlan.stockCategory === 'rolo'
+              ? `🌀 ROLO DO ESTOQUE • ${(currentPlan.length / 1000).toFixed(2)}m`
+              : '📋 CHAPA PLANA'}
           </span>
-          <div>
-            <h4 className="text-slate-900 font-black text-sm sm:text-base flex items-center gap-2">
-              <span>{currentPlan.sheetName}</span>
-              <span className="text-xs font-mono text-slate-500 font-normal">
+          <div className="min-w-0">
+            <h4 className="text-slate-900 font-black text-sm sm:text-base flex items-center gap-2 flex-wrap">
+              <span className="truncate">{currentPlan.sheetName}</span>
+              <span className="text-xs font-mono text-slate-500 font-normal whitespace-nowrap">
                 ({currentPlan.width} × {currentPlan.length} mm)
               </span>
             </h4>
-            <div className="text-xs text-slate-500 font-medium">
-              Material: <strong className="text-slate-700">{currentPlan.material} ({currentPlan.thickness})</strong> • Peças: <strong className="text-slate-900">{currentPlan.placedPieces.length}</strong>
+            <div className="text-xs text-slate-500 font-medium flex items-center flex-wrap gap-x-2">
+              <span className="whitespace-nowrap">Material: <strong className="text-slate-700">{currentPlan.material} ({currentPlan.thickness})</strong></span>
+              <span className="whitespace-nowrap">• Peças: <strong className="text-slate-900">{currentPlan.placedPieces.length}</strong></span>
               {currentPlan.isCoilCut && (
-                <span className="ml-2 text-indigo-700 font-bold">
-                  (Corte sob medida do rolo de 30-40m)
+                <span className="text-indigo-700 font-bold whitespace-nowrap">
+                  • Desenrolar: {((currentPlan.width * currentPlan.length) / 1000000).toFixed(2)} m²
                 </span>
               )}
             </div>
@@ -373,38 +458,38 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
         </div>
 
         {/* Métricas de Rendimento & Controles de Zoom */}
-        <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-          <div className="text-right">
-            <div className="text-[10px] font-bold text-slate-400 uppercase">Aproveitamento</div>
-            <div className="text-xl font-black text-emerald-600 font-mono">
+        <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-100">
+          <div className="text-left sm:text-right">
+            <div className="text-[10px] font-bold text-slate-400 uppercase whitespace-nowrap">Aproveitamento</div>
+            <div className="text-lg sm:text-xl font-black text-emerald-600 font-mono whitespace-nowrap">
               {currentPlan.yieldPercentage}%
             </div>
           </div>
-          <div className="h-8 w-px bg-slate-200 hidden sm:block"></div>
-          <div className="text-right">
-            <div className="text-[10px] font-bold text-slate-400 uppercase">Desperdício</div>
-            <div className="text-sm font-bold text-slate-700 font-mono">
+          <div className="h-8 w-px bg-slate-200"></div>
+          <div className="text-left sm:text-right">
+            <div className="text-[10px] font-bold text-slate-400 uppercase whitespace-nowrap">Desperdício</div>
+            <div className="text-xs sm:text-sm font-bold text-slate-700 font-mono whitespace-nowrap">
               {GeometryService.formatAreaM2(currentPlan.wasteAreaMm2)}
             </div>
           </div>
 
-          <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
+          <div className="flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200 shrink-0">
             <button
               onClick={() => setZoom((z) => Math.max(0.6, z - 0.15))}
-              className="p-1 hover:bg-white text-slate-600 rounded transition-colors"
+              className="p-1.5 hover:bg-white text-slate-600 rounded transition-colors"
               title="Reduzir Zoom"
             >
               <ZoomOut className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => setZoom(1)}
-              className="px-1.5 py-0.5 text-[11px] font-mono text-slate-600 hover:text-slate-900"
+              className="px-1.5 py-0.5 text-[11px] font-mono font-bold text-slate-600 hover:text-slate-900"
             >
               {Math.round(zoom * 100)}%
             </button>
             <button
               onClick={() => setZoom((z) => Math.min(2.0, z + 0.15))}
-              className="p-1 hover:bg-white text-slate-600 rounded transition-colors"
+              className="p-1.5 hover:bg-white text-slate-600 rounded transition-colors"
               title="Aumentar Zoom"
             >
               <ZoomIn className="w-3.5 h-3.5" />
@@ -414,73 +499,73 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
       </div>
 
       {/* BARRA DE FERRAMENTAS INTERATIVAS: MODO EDIÇÃO MANUAL & ROTAÇÃO DA CHAPA */}
-      <div className="bg-slate-100/90 border border-slate-200 rounded-xl p-3 mb-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div className="bg-slate-100/90 border border-slate-200 rounded-xl p-3 mb-3 flex flex-wrap items-center justify-between gap-2.5 text-xs">
         {/* Toggle de Ajuste Manual */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => setIsManualEditMode(!isManualEditMode)}
-            className={`px-3 py-1.5 rounded-lg font-bold flex items-center gap-1.5 transition-all shadow-sm ${
+            className={`px-3 py-2 rounded-lg font-bold flex items-center gap-1.5 transition-all shadow-xs touch-manipulation cursor-pointer ${
               isManualEditMode
                 ? 'bg-blue-600 text-white border border-blue-700 shadow-blue-500/30'
                 : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-50'
             }`}
           >
-            <Move className="w-3.5 h-3.5" />
-            <span>{isManualEditMode ? '✓ Modo Ajuste Manual Ativo' : 'Ativar Ajuste Manual (Arrastar e Soltar)'}</span>
+            <Move className="w-3.5 h-3.5 shrink-0" />
+            <span className="whitespace-nowrap">{isManualEditMode ? '✓ Modo Ajuste Ativo' : 'Ajuste Manual (Arrastar / Mover)'}</span>
           </button>
 
           {isManualEditMode && (
             <button
               type="button"
               onClick={resetToOriginal}
-              className="px-2.5 py-1.5 bg-white text-slate-600 hover:text-slate-900 border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1 transition-colors"
+              className="px-3 py-2 bg-white text-slate-600 hover:text-slate-900 border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 transition-colors touch-manipulation cursor-pointer font-semibold whitespace-nowrap"
               title="Restaurar posições originais do algoritmo de corte"
             >
-              <RefreshCw className="w-3 h-3" />
-              <span>Restaurar Original</span>
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Restaurar</span>
             </button>
           )}
         </div>
 
         {/* ROTAÇÃO DA CHAPA / DIAGRAMA (0º, 45º, 90º, 180º) */}
-        <div className="flex items-center gap-1.5 bg-white px-2 py-1 rounded-lg border border-slate-300">
-          <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1">
+        <div className="flex items-center gap-1.5 bg-white px-2 py-1.5 rounded-lg border border-slate-300 flex-wrap">
+          <span className="text-[11px] font-bold text-slate-600 flex items-center gap-1 whitespace-nowrap">
             <Compass className="w-3.5 h-3.5 text-blue-600" />
-            <span>Virar Chapa:</span>
+            <span className="hidden sm:inline">Virar Chapa:</span>
           </span>
           <div className="flex items-center gap-1">
             <button
               type="button"
               onClick={() => setSheetRotation(0)}
-              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
+              className={`px-2 py-1 rounded text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                 sheetRotation === 0 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              0º (Horizontal)
+              0º Horiz.
             </button>
             <button
               type="button"
               onClick={() => setSheetRotation(45)}
-              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
+              className={`px-2 py-1 rounded text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                 sheetRotation === 45 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              45º (Diagonal)
+              45º
             </button>
             <button
               type="button"
               onClick={() => setSheetRotation(90)}
-              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
+              className={`px-2 py-1 rounded text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                 sheetRotation === 90 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
-              90º (Vertical)
+              90º Vert.
             </button>
             <button
               type="button"
               onClick={() => setSheetRotation(180)}
-              className={`px-2 py-0.5 rounded text-[11px] font-bold transition-colors ${
+              className={`px-2 py-1 rounded text-[11px] font-bold transition-colors whitespace-nowrap cursor-pointer ${
                 sheetRotation === 180 ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'
               }`}
             >
@@ -490,64 +575,175 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
         </div>
       </div>
 
-      {/* PAINEL DE CONTROLE DA PEÇA SELECIONADA (ROTAÇÃO 45º/90º, FLIP, MICRO-AJUSTE) */}
-      {selectedPiece && (
-        <div className="mb-3 p-3 bg-indigo-50/80 border border-indigo-200 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs animate-in fade-in">
-          <div className="flex items-center gap-2.5">
-            <div className="w-3 h-3 rounded-full bg-blue-600"></div>
-            <div>
-              <span className="font-bold text-slate-900">
-                Peça Selecionada: #{selectedPiece.cutIndex} {selectedPiece.pieceName}
-              </span>
-              <span className="ml-2 font-mono text-[11px] text-indigo-700 font-semibold">
-                Posição: X={selectedPiece.x}mm, Y={selectedPiece.y}mm • Medida: {selectedPiece.length}×{selectedPiece.devStart}mm
-                {selectedPiece.rotation ? ` (Giro: ${selectedPiece.rotation}º)` : ''}
-                {selectedPiece.isFlipped ? ' [Invertida]' : ''}
-              </span>
-            </div>
+      {/* CONTROLE DE TAMANHO DINÂMICO DA CHAPA / DESENROLAR DA BOBINA */}
+      {isManualEditMode && (
+        <div className="bg-emerald-50/80 border border-emerald-300 rounded-xl p-3 mb-3 flex flex-wrap items-center justify-between gap-3 text-xs animate-in fade-in">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-bold text-emerald-900 flex items-center gap-1.5 whitespace-nowrap">
+              <Scissors className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+              <span>Tamanho da Chapa / Desenrolar:</span>
+            </span>
+            <span className="font-mono font-bold bg-white px-2 py-1 rounded border border-emerald-300 text-emerald-900 whitespace-nowrap">
+              {currentPlan.width} × {currentPlan.length} mm ({(currentPlan.length / 1000).toFixed(2)}m)
+            </span>
+
+            <label className="flex items-center gap-1.5 text-emerald-900 font-semibold cursor-pointer select-none bg-white px-2.5 py-1 rounded-lg border border-emerald-300 hover:bg-emerald-100/50 transition-colors">
+              <input
+                type="checkbox"
+                checked={autoFitLength}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setAutoFitLength(val);
+                  if (val) {
+                    handleAutoFitSheetToPieces();
+                  }
+                }}
+                className="w-3.5 h-3.5 text-emerald-600 rounded cursor-pointer"
+              />
+              <span className="whitespace-nowrap">Acompanhar Peças Automaticamente (Auto-Fit)</span>
+            </label>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Botões de Rotação da Peça (45º e 90º) */}
-            <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-indigo-200">
+            <button
+              type="button"
+              onClick={handleAutoFitSheetToPieces}
+              className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold flex items-center gap-1 transition-colors shadow-xs cursor-pointer whitespace-nowrap"
+              title="Ajusta o comprimento da chapa exatamente no final da última peça posicionada"
+            >
+              <Scissors className="w-3 h-3" />
+              <span>Ajustar ao Fim do Corte</span>
+            </button>
+
+            <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg border border-emerald-300">
+              <span className="text-[10px] font-bold text-slate-500 uppercase">Comprimento:</span>
+              <input
+                type="number"
+                value={manualSheetLengthInput}
+                onChange={(e) => setManualSheetLengthInput(e.target.value)}
+                onBlur={() => {
+                  const parsed = parseInt(manualSheetLengthInput, 10);
+                  if (!isNaN(parsed) && parsed > 0) {
+                    setAutoFitLength(false);
+                    handleApplyCustomSheetLength(parsed);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const parsed = parseInt(manualSheetLengthInput, 10);
+                    if (!isNaN(parsed) && parsed > 0) {
+                      setAutoFitLength(false);
+                      handleApplyCustomSheetLength(parsed);
+                    }
+                  }
+                }}
+                className="w-20 px-1.5 py-0.5 font-mono text-xs font-bold text-slate-900 border border-slate-200 rounded text-center focus:ring-1 focus:ring-emerald-500 focus:outline-hidden"
+              />
+              <span className="text-[10px] font-bold text-slate-400">mm</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PAINEL DE CONTROLE DA PEÇA SELECIONADA (ROTAÇÃO 45º/90º, FLIP, D-PAD TOUCH E MICRO-AJUSTE) */}
+      {selectedPiece && (
+        <div className="mb-3 p-3 sm:p-4 bg-indigo-50/90 border-2 border-indigo-300 rounded-xl flex flex-col gap-3 text-xs shadow-xs animate-in fade-in">
+          {/* Informações da Peça Selecionada */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-indigo-200/80 pb-2.5">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-3.5 h-3.5 rounded-full bg-blue-600 shrink-0"></div>
+              <div className="min-w-0">
+                <span className="font-bold text-slate-900 text-xs sm:text-sm truncate block">
+                  Peça #{selectedPiece.cutIndex} • {selectedPiece.pieceName}
+                </span>
+                <span className="font-mono text-[11px] text-indigo-800 font-bold whitespace-nowrap">
+                  Medida: {selectedPiece.length} × {selectedPiece.devStart}mm
+                  {selectedPiece.rotation ? ` (Giro: ${selectedPiece.rotation}º)` : ''}
+                  {selectedPiece.isFlipped ? ' [Invertida]' : ''}
+                </span>
+              </div>
+            </div>
+
+            {/* Inputs Diretos de Posição X e Y em mm */}
+            <div className="flex items-center gap-2 self-start sm:self-auto bg-white px-2.5 py-1.5 rounded-lg border border-indigo-200">
+              <div className="flex items-center gap-1 font-mono">
+                <span className="text-[10px] font-bold text-slate-500">X:</span>
+                <input
+                  type="number"
+                  value={selectedPiece.x}
+                  onChange={(e) => {
+                    const val = Math.max(0, parseInt(e.target.value) || 0);
+                    const updated = currentPlan.placedPieces.map((p) =>
+                      p.pieceId === selectedPieceId ? { ...p, x: val } : p
+                    );
+                    applyPiecesUpdate(updated);
+                  }}
+                  className="w-14 text-center font-bold text-xs bg-slate-50 border border-slate-300 rounded py-0.5"
+                />
+                <span className="text-[10px] text-slate-400">mm</span>
+              </div>
+              <div className="w-px h-4 bg-slate-200"></div>
+              <div className="flex items-center gap-1 font-mono">
+                <span className="text-[10px] font-bold text-slate-500">Y:</span>
+                <input
+                  type="number"
+                  value={selectedPiece.y}
+                  onChange={(e) => {
+                    const val = Math.max(0, parseInt(e.target.value) || 0);
+                    const updated = currentPlan.placedPieces.map((p) =>
+                      p.pieceId === selectedPieceId ? { ...p, y: val } : p
+                    );
+                    applyPiecesUpdate(updated);
+                  }}
+                  className="w-14 text-center font-bold text-xs bg-slate-50 border border-slate-300 rounded py-0.5"
+                />
+                <span className="text-[10px] text-slate-400">mm</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2.5">
+            {/* Botões de Ações Rápidas (Giro e Inversão) */}
+            <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 type="button"
                 onClick={rotatePiece90}
-                className="px-2 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-900 rounded font-bold text-[11px] flex items-center gap-1"
+                className="min-h-[38px] px-3 py-1.5 bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs touch-manipulation cursor-pointer active:scale-95 transition-transform"
                 title="Girar peça em 90 graus"
               >
-                <RotateCw className="w-3 h-3" />
-                <span>Girar 90º</span>
+                <RotateCw className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="whitespace-nowrap">Girar 90º</span>
               </button>
 
               <button
                 type="button"
                 onClick={rotatePiece45}
-                className="px-2 py-1 bg-indigo-100 hover:bg-indigo-200 text-indigo-900 rounded font-bold text-[11px] flex items-center gap-1"
+                className="min-h-[38px] px-2.5 py-1.5 bg-white hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs touch-manipulation cursor-pointer active:scale-95 transition-transform"
                 title="Girar peça em 45 graus para corte em ângulo"
               >
-                <RotateCw className="w-3 h-3" />
-                <span>Girar 45º</span>
+                <RotateCw className="w-3.5 h-3.5 text-indigo-600" />
+                <span className="whitespace-nowrap">Girar 45º</span>
               </button>
 
               {selectedPiece.isTrapezoid && (
                 <button
                   type="button"
                   onClick={flipTrapezoidPiece}
-                  className="px-2 py-1 bg-purple-100 hover:bg-purple-200 text-purple-900 rounded font-bold text-[11px] flex items-center gap-1"
+                  className="min-h-[38px] px-2.5 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-900 border border-purple-300 rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-xs touch-manipulation cursor-pointer active:scale-95 transition-transform"
                   title="Inverter lados do trapézio"
                 >
-                  <span>⇄ Inverter (180º)</span>
+                  <span className="whitespace-nowrap">⇄ Inverter (180º)</span>
                 </button>
               )}
             </div>
 
             {/* Alinhamentos Rápidos */}
             <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-indigo-200">
+              <span className="text-[10px] font-bold text-slate-400 px-1 uppercase hidden md:inline">Alinhar:</span>
               <button
                 type="button"
                 onClick={() => alignPiece('top')}
-                className="px-1.5 py-1 hover:bg-slate-100 text-slate-700 rounded text-[11px] font-bold"
+                className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 rounded text-xs font-bold whitespace-nowrap cursor-pointer touch-manipulation"
                 title="Alinhar ao topo (Y=0)"
               >
                 Topo
@@ -555,7 +751,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               <button
                 type="button"
                 onClick={() => alignPiece('bottom')}
-                className="px-1.5 py-1 hover:bg-slate-100 text-slate-700 rounded text-[11px] font-bold"
+                className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 rounded text-xs font-bold whitespace-nowrap cursor-pointer touch-manipulation"
                 title="Alinhar à base"
               >
                 Base
@@ -563,7 +759,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               <button
                 type="button"
                 onClick={() => alignPiece('left')}
-                className="px-1.5 py-1 hover:bg-slate-100 text-slate-700 rounded text-[11px] font-bold"
+                className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 rounded text-xs font-bold whitespace-nowrap cursor-pointer touch-manipulation"
                 title="Alinhar à esquerda (X=0)"
               >
                 Esq.
@@ -571,66 +767,72 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               <button
                 type="button"
                 onClick={() => alignPiece('right')}
-                className="px-1.5 py-1 hover:bg-slate-100 text-slate-700 rounded text-[11px] font-bold"
+                className="px-2.5 py-1.5 hover:bg-slate-100 text-slate-700 rounded text-xs font-bold whitespace-nowrap cursor-pointer touch-manipulation"
                 title="Alinhar à direita"
               >
                 Dir.
               </button>
             </div>
 
-            {/* Micro-Ajuste com Setas */}
-            <div className="flex items-center gap-1 bg-white p-1 rounded-lg border border-indigo-200">
-              <select
-                value={stepSizeMm}
-                onChange={(e) => setStepSizeMm(Number(e.target.value))}
-                className="text-[10px] font-bold bg-slate-50 border border-slate-200 rounded px-1 py-0.5"
-                title="Tamanho do passo de ajuste"
-              >
-                <option value={1}>±1mm</option>
-                <option value={5}>±5mm</option>
-                <option value={10}>±10mm</option>
-                <option value={50}>±50mm</option>
-              </select>
+            {/* Micro-Ajuste com D-Pad Direcional (Otimizado para Touch Mobile) */}
+            <div className="flex items-center gap-1.5 bg-white p-1.5 rounded-lg border border-indigo-200">
+              <div className="flex items-center gap-1">
+                <span className="text-[10px] font-bold text-slate-400 uppercase hidden sm:inline">Passo:</span>
+                <select
+                  value={stepSizeMm}
+                  onChange={(e) => setStepSizeMm(Number(e.target.value))}
+                  className="text-xs font-bold bg-slate-50 border border-slate-200 rounded px-1.5 py-1"
+                  title="Tamanho do passo de ajuste"
+                >
+                  <option value={1}>±1mm</option>
+                  <option value={5}>±5mm</option>
+                  <option value={10}>±10mm</option>
+                  <option value={50}>±50mm</option>
+                  <option value={100}>±100mm</option>
+                </select>
+              </div>
 
-              <button
-                type="button"
-                onClick={() => moveSelectedPiece(-stepSizeMm, 0)}
-                className="p-1 hover:bg-slate-100 rounded text-slate-700"
-                title={`Mover para Esquerda (-${stepSizeMm}mm)`}
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => moveSelectedPiece(stepSizeMm, 0)}
-                className="p-1 hover:bg-slate-100 rounded text-slate-700"
-                title={`Mover para Direita (+${stepSizeMm}mm)`}
-              >
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => moveSelectedPiece(0, -stepSizeMm)}
-                className="p-1 hover:bg-slate-100 rounded text-slate-700"
-                title={`Mover para Cima (-${stepSizeMm}mm)`}
-              >
-                <ArrowUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => moveSelectedPiece(0, stepSizeMm)}
-                className="p-1 hover:bg-slate-100 rounded text-slate-700"
-                title={`Mover para Baixo (+${stepSizeMm}mm)`}
-              >
-                <ArrowDown className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => moveSelectedPiece(-stepSizeMm, 0)}
+                  className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-blue-100 active:bg-blue-200 rounded-md text-slate-700 hover:text-blue-700 font-bold transition-colors touch-manipulation cursor-pointer"
+                  title={`Mover para Esquerda (-${stepSizeMm}mm)`}
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveSelectedPiece(stepSizeMm, 0)}
+                  className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-blue-100 active:bg-blue-200 rounded-md text-slate-700 hover:text-blue-700 font-bold transition-colors touch-manipulation cursor-pointer"
+                  title={`Mover para Direita (+${stepSizeMm}mm)`}
+                >
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveSelectedPiece(0, -stepSizeMm)}
+                  className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-blue-100 active:bg-blue-200 rounded-md text-slate-700 hover:text-blue-700 font-bold transition-colors touch-manipulation cursor-pointer"
+                  title={`Mover para Cima (-${stepSizeMm}mm)`}
+                >
+                  <ArrowUp className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveSelectedPiece(0, stepSizeMm)}
+                  className="w-8 h-8 flex items-center justify-center bg-slate-100 hover:bg-blue-100 active:bg-blue-200 rounded-md text-slate-700 hover:text-blue-700 font-bold transition-colors touch-manipulation cursor-pointer"
+                  title={`Mover para Baixo (+${stepSizeMm}mm)`}
+                >
+                  <ArrowDown className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* Blueprint Canvas com Suporte a Rotação de Chapa & Drag and Drop */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 overflow-x-auto select-none">
+      {/* Blueprint Canvas com Suporte a Rotação de Chapa & Drag and Drop Touch */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 sm:p-4 overflow-x-auto select-none touch-pan-x touch-pan-y">
         <div
           className="transition-transform duration-200 origin-center mx-auto"
           style={{
@@ -640,30 +842,37 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
           }}
         >
           {/* Eixos Dimensionais */}
-          <div className="flex justify-between text-[11px] font-mono text-slate-400 font-bold uppercase pb-1.5 px-1">
+          <div className="flex justify-between text-[11px] font-mono text-slate-400 font-bold uppercase pb-1.5 px-1 whitespace-nowrap">
             <span>0 mm</span>
-            <span className="text-slate-600">
-              {isManualEditMode ? '✋ MODO ARRASTAR E SOLTAR ATIVO — Clique e arraste as peças' : `Eixo Longitudinal (Comprimento Total): ${currentPlan.length} mm ➔`}
+            <span className="text-slate-600 truncate px-2">
+              {isManualEditMode ? '✋ MODO AJUSTE ATIVO — Toque e arraste as peças ou use os botões direcionais' : `Eixo Longitudinal: ${currentPlan.length} mm ➔`}
             </span>
             <span>{currentPlan.length} mm</span>
           </div>
 
           <div
-            className={`relative border-2 rounded-lg shadow-sm overflow-hidden bg-white ${
-              isManualEditMode ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-300'
+            className={`relative border-2 rounded-lg shadow-sm overflow-hidden bg-white touch-none ${
+              isManualEditMode ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-300'
             }`}
             style={{
               backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
               backgroundSize: '20px 20px',
+              touchAction: 'none',
             }}
           >
             <svg
               ref={svgRef}
               viewBox={`0 0 ${currentPlan.length} ${currentPlan.width}`}
-              className="w-full h-auto block"
-              style={{ maxHeight: '450px', minHeight: '150px', cursor: isManualEditMode ? 'crosshair' : 'default' }}
+              className="w-full h-auto block select-none touch-none"
+              style={{
+                maxHeight: '450px',
+                minHeight: '150px',
+                cursor: isManualEditMode ? 'crosshair' : 'default',
+                touchAction: 'none',
+              }}
               onPointerMove={handlePointerMoveCanvas}
               onPointerUp={handlePointerUpCanvas}
+              onPointerCancel={handlePointerCancelCanvas}
             >
               <defs>
                 <pattern id={`gb-waste-${index}`} width="16" height="16" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
@@ -754,9 +963,10 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                       key={`piece-${p.pieceId}-${pIdx}`}
                       transform={transformAttr}
                       onPointerDown={(e) => handlePointerDownPiece(e, p)}
-                      className={`transition-opacity ${isManualEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${
-                        isDragging ? 'opacity-70' : 'hover:opacity-90'
-                      }`}
+                      style={{ touchAction: 'none' }}
+                      className={`transition-opacity touch-none select-none ${
+                        isManualEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                      } ${isDragging ? 'opacity-70' : 'hover:opacity-90'}`}
                     >
                       <polygon
                         points={geo.points}
@@ -774,7 +984,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                         fontSize={Math.max(12, Math.min(20, avgHeight / 3.5))}
                         fontWeight="bold"
                         textAnchor="middle"
-                        className="font-sans select-none drop-shadow-sm uppercase"
+                        className="font-sans select-none drop-shadow-sm uppercase pointer-events-none"
                       >
                         #{p.cutIndex} {p.pieceName} ({p.length}mm | {p.devStart}→{p.devEnd}mm)
                         {p.isFlipped ? ' [INV]' : ''}
@@ -793,9 +1003,10 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                     key={`piece-${p.pieceId}-${pIdx}`}
                     transform={rectTransformAttr}
                     onPointerDown={(e) => handlePointerDownPiece(e, p)}
-                    className={`transition-opacity ${isManualEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${
-                      isDragging ? 'opacity-70' : 'hover:opacity-90'
-                    }`}
+                    style={{ touchAction: 'none' }}
+                    className={`transition-opacity touch-none select-none ${
+                      isManualEditMode ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'
+                    } ${isDragging ? 'opacity-70' : 'hover:opacity-90'}`}
                   >
                     <rect
                       x={p.x}
@@ -816,7 +1027,7 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                       fontSize={Math.max(12, Math.min(20, p.devStart / 3.5))}
                       fontWeight="bold"
                       textAnchor="middle"
-                      className="font-sans select-none drop-shadow-sm uppercase"
+                      className="font-sans select-none drop-shadow-sm uppercase pointer-events-none"
                     >
                       #{p.cutIndex} {p.pieceName} ({p.length} × {p.devStart} mm)
                       {p.rotation ? ` [${p.rotation}º]` : ''}
@@ -827,9 +1038,9 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
             </svg>
           </div>
 
-          <div className="flex justify-between text-[11px] font-mono text-slate-400 font-bold uppercase pt-1.5 px-1">
+          <div className="flex justify-between text-[11px] font-mono text-slate-400 font-bold uppercase pt-1.5 px-1 whitespace-nowrap">
             <span>0 mm</span>
-            <span className="text-slate-600">Desenvolvimento (Largura da Chapa): {currentPlan.width} mm</span>
+            <span className="text-slate-600 truncate px-2">Desenvolvimento (Largura da Chapa): {currentPlan.width} mm</span>
             <span>{currentPlan.width} mm</span>
           </div>
         </div>
@@ -840,11 +1051,11 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Peças cortadas */}
           <div>
-            <h5 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-2">
-              <Layers className="w-3.5 h-3.5 text-blue-600" />
+            <h5 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-2 whitespace-nowrap">
+              <Layers className="w-3.5 h-3.5 text-blue-600 shrink-0" />
               Peças nesta Chapa ({currentPlan.placedPieces.length})
             </h5>
-            <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
               {currentPlan.placedPieces.map((p, pIdx) => {
                 const color = PIECE_COLORS[(p.colorIndex || pIdx) % PIECE_COLORS.length];
                 const isSelected = selectedPieceId === p.pieceId;
@@ -853,32 +1064,32 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
                   <div
                     key={`list-p-${p.pieceId}-${pIdx}`}
                     onClick={() => setSelectedPieceId(isSelected ? null : p.pieceId)}
-                    className={`flex items-center justify-between p-2.5 rounded-lg text-xs cursor-pointer border transition-colors ${
+                    className={`flex items-center justify-between gap-2 p-2.5 rounded-lg text-xs cursor-pointer border transition-colors ${
                       isSelected
                         ? 'bg-blue-50 border-blue-400 text-blue-900'
                         : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
                     }`}
                   >
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span
-                        className="w-3 h-3 rounded-full flex-shrink-0"
+                        className="w-3 h-3 rounded-full shrink-0"
                         style={{ backgroundColor: color.stroke }}
                       ></span>
-                      <span className="font-bold">#{p.cutIndex} {p.pieceName}</span>
+                      <span className="font-bold truncate">#{p.cutIndex} {p.pieceName}</span>
                       {p.isTrapezoid && (
-                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[10px] font-bold">
-                          {p.isFlipped ? '📐 Trapézio Invertido' : '📐 Trapézio'}
+                        <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 text-[10px] font-bold whitespace-nowrap shrink-0">
+                          {p.isFlipped ? '📐 Trap. Inv.' : '📐 Trapézio'}
                         </span>
                       )}
                       {p.rotation ? (
-                        <span className="px-1 py-0.2 bg-indigo-100 text-indigo-700 rounded text-[10px] font-mono">
+                        <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-700 rounded text-[10px] font-mono whitespace-nowrap shrink-0 font-bold">
                           {p.rotation}º
                         </span>
                       ) : null}
                     </div>
-                    <div className="font-mono text-slate-500 font-semibold text-right">
-                      <div>{p.isTrapezoid ? `${p.devStart}→${p.devEnd} mm` : `${p.devStart} mm`} × {p.length} mm</div>
-                      <div className="text-[10px] text-slate-400">X: {p.x}mm, Y: {p.y}mm</div>
+                    <div className="font-mono text-slate-500 font-semibold text-right shrink-0">
+                      <div className="whitespace-nowrap">{p.isTrapezoid ? `${p.devStart}→${p.devEnd} mm` : `${p.devStart} mm`} × {p.length} mm</div>
+                      <div className="text-[10px] text-slate-400 whitespace-nowrap">X: {p.x}mm, Y: {p.y}mm</div>
                     </div>
                   </div>
                 );

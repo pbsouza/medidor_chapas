@@ -221,10 +221,21 @@ export class CutOptimizationService {
     // Sugere EXCLUSIVAMENTE os materiais que o usuário tem na oficina!
     // =========================================================================
     if (hasUserInventory) {
-      // 1. Simulação para cada Bobina/Rolo cadastrada no estoque do usuário
+      // 1. Simulação Multi-Bobinas Mista do Estoque (Distribui cortes de 70cm na bobina de 70cm e de 1m na de 1m)
       if (userCoils.length > 0) {
-        // Agrupa por largura única para testar cada opção de rolo disponível
-        const uniqueCoilWidths = Array.from(new Set(userCoils.map((c) => c.width)));
+        const multiCoilSol = this.runMultiCoilStrategy(
+          expandedPieces,
+          userCoils,
+          settings,
+          machineAlerts
+        );
+
+        if (multiCoilSol && multiCoilSol.unplacedPieces.length === 0) {
+          candidateSolutions.push(multiCoilSol);
+        }
+
+        // 2. Simulação individual para cada Bobina/Rolo cadastrada no estoque do usuário
+        const uniqueCoilWidths = Array.from(new Set(userCoils.map((c) => c.width))).sort((a, b) => a - b);
 
         for (const widthMm of uniqueCoilWidths) {
           const matchingCoil = userCoils.find((c) => c.width === widthMm)!;
@@ -241,7 +252,7 @@ export class CutOptimizationService {
               sheetsCount: 0,
               lateralWasteCm: 0,
               piecesPlaced: 0,
-              description: `Rolo do estoque insuficiente (maior peça requer ${maxPieceWidth / 10} cm).`,
+              description: `Bobina ${widthCm}cm insuficiente para peças maiores que ${widthCm}cm isoladas (utilize a opção Multi-Bobina para cortar as peças compatíveis).`,
               isFromStock: true,
             });
             continue;
@@ -290,7 +301,7 @@ export class CutOptimizationService {
         }
       }
 
-      // 2. Simulação com Retalhos Cadastrados (se houver)
+      // 3. Simulação com Retalhos Cadastrados (se houver)
       if (userScraps.length > 0) {
         // Usa retalhos e, se faltar material, completa com os rolos ou chapas do usuário
         const fallbackStock = userCoils.length > 0 ? userCoils : userFlatSheets;
@@ -323,7 +334,7 @@ export class CutOptimizationService {
         }
       }
 
-      // 3. Simulação com Chapas Planas Inteiras (se houver)
+      // 4. Simulação com Chapas Planas Inteiras (se houver)
       if (userFlatSheets.length > 0) {
         const sheetsPool = [...userFlatSheets, ...userScraps];
         const sheetSol = this.runStrategy(
@@ -507,7 +518,13 @@ export class CutOptimizationService {
       sol.rank = rank;
       sol.allTestedWidthsComparison = testedWidthsComparison;
 
-      const pWidthCm = sol.primaryWidthMm ? `${sol.primaryWidthMm / 10} cm` : `${sol.plans[0]?.width / 10} cm`;
+      const distinctCoils = Array.from(new Set(sol.plans.filter((p) => p.isCoilCut).map((p) => `${p.width / 10}cm`)));
+      const isMultiCoil = distinctCoils.length > 1;
+      const pWidthCm = isMultiCoil
+        ? distinctCoils.join(' + ')
+        : sol.primaryWidthMm
+        ? `${sol.primaryWidthMm / 10} cm`
+        : `${sol.plans[0]?.width / 10} cm`;
       const meters = sol.totalLengthCutMeters || Math.round((sol.plans.reduce((acc, p) => acc + p.length, 0) / 1000) * 100) / 100;
       const wasteCm = sol.lateralWasteMm !== undefined ? `${(sol.lateralWasteMm / 10).toFixed(1)} cm` : 'mínima';
 
@@ -517,6 +534,8 @@ export class CutOptimizationService {
         sol.title = `${medal}: Uso de ${sol.totalScrapsUsed} Retalho(s) (${sol.yieldPercentage}% aproveitamento • ${sol.totalSheetsUsed > 0 ? `+ Rolo ${pWidthCm}` : '100% Retalhos'})`;
       } else if (sol.stockCategory === 'chapa' || (sol.totalSheetsUsed > 0 && !sol.primaryWidthMm)) {
         sol.title = `${medal}: Chapas Planas do Estoque (${sol.totalSheetsUsed} chapa(s) • Rendimento ${sol.yieldPercentage}%)`;
+      } else if (isMultiCoil) {
+        sol.title = `${medal}: 🌀 Multi-Bobinas do Estoque (${pWidthCm}) • Desenrolar total ${meters.toFixed(2)}m (Rendimento ${sol.yieldPercentage}%)`;
       } else if (sol.isFromUserStock) {
         sol.title = `${medal}: 🌀 Rolo do Estoque (${pWidthCm}) • Desenrolar ${meters.toFixed(2)}m (Sobra lateral: ${wasteCm} • Rendimento ${sol.yieldPercentage}%)`;
       } else {
@@ -525,6 +544,177 @@ export class CutOptimizationService {
     });
 
     return finalSolutions;
+  }
+
+  /**
+   * Otimização Multi-Bobinas Inteligente:
+   * Distribui dinamicamente as peças pelas diferentes bobinas disponíveis no estoque do usuário (ex: 70cm e 100cm),
+   * garantindo que cortes de 70cm sejam puxados da bobina de 70cm (evitando desperdício) e peças maiores usem a bobina de 100cm.
+   */
+  private static runMultiCoilStrategy(
+    allPieces: ExpandedPiece[],
+    availableCoils: StockCandidate[],
+    settings: MachineSettings,
+    _baseAlerts: string[]
+  ): OptimizationSolution | null {
+    if (availableCoils.length === 0) return null;
+
+    // Ordena bobinas da menor largura para a maior (ex: 700mm, 800mm, 1000mm, 1200mm)
+    const sortedCoils = [...availableCoils].sort((a, b) => a.width - b.width);
+    const uniqueWidths = Array.from(new Set(sortedCoils.map((c) => c.width)));
+    const coilsByWidth = uniqueWidths.map((w) => sortedCoils.find((c) => c.width === w)!);
+
+    const sortingModes: PriorityMode[] = ['max_yield', 'balanced', 'fewest_sheets'];
+    let bestMultiPlans: SheetCutPlan[] | null = null;
+    let bestMultiScore = -Infinity;
+
+    for (const mode of sortingModes) {
+      let pending = [...allPieces];
+      pending = this.sortPiecesForPacking(pending, mode);
+
+      const currentPlans: SheetCutPlan[] = [];
+      let allFitted = true;
+
+      while (pending.length > 0) {
+        let bestCandidatePlan: SheetCutPlan | null = null;
+        let bestCandidateScore = -Infinity;
+
+        // Para a próxima folha a ser puxada, avalia qual bobina do estoque oferece o menor desperdício e maior rendimento
+        for (const coil of coilsByWidth) {
+          const plan = this.packSingleCoilSheet(coil, pending, settings);
+          if (!plan || plan.placedPieces.length === 0) continue;
+
+          // Calcula sobra lateral máxima dessa bobina
+          const sideRemnant = plan.remnants.find((r) => r.width > 0 && r.y > 0);
+          const lateralWaste = sideRemnant ? sideRemnant.width : 0;
+
+          // Score desta folha:
+          // 1. Alto rendimento
+          let sheetScore = plan.yieldPercentage * 20;
+          // 2. Quantidade de peças aproveitadas nesta puxada
+          sheetScore += plan.placedPieces.length * 40;
+          // 3. Penalidade severa para sobras laterais excessivas (ex: usar 1m quando sobra 30cm)
+          sheetScore -= (lateralWaste / 10) * 12;
+          // 4. Bônus para bobina justa (sobra lateral < 8cm)
+          if (lateralWaste <= 80) {
+            sheetScore += 350;
+          } else if (lateralWaste <= 150) {
+            sheetScore += 150;
+          }
+
+          if (sheetScore > bestCandidateScore) {
+            bestCandidateScore = sheetScore;
+            bestCandidatePlan = plan;
+          }
+        }
+
+        if (!bestCandidatePlan || bestCandidatePlan.placedPieces.length === 0) {
+          allFitted = false;
+          break;
+        }
+
+        currentPlans.push(bestCandidatePlan);
+        const placedIds = new Set(bestCandidatePlan.placedPieces.map((p) => p.pieceId));
+        pending = pending.filter((p) => !placedIds.has(p.instanceId));
+      }
+
+      if (allFitted && currentPlans.length > 0) {
+        let totalUsedArea = 0;
+        let totalSheetArea = 0;
+        let totalWasteArea = 0;
+
+        for (const plan of currentPlans) {
+          totalUsedArea += plan.usedAreaMm2;
+          totalSheetArea += plan.totalAreaMm2;
+          totalWasteArea += plan.wasteAreaMm2;
+        }
+
+        const yieldPct = totalSheetArea > 0 ? (totalUsedArea / totalSheetArea) * 100 : 0;
+        const totalMeters = currentPlans.reduce((acc, p) => acc + p.length, 0) / 1000;
+
+        let totalScore = yieldPct * 100;
+        totalScore -= (totalWasteArea / 1_000_000) * 150;
+        totalScore -= totalMeters * 10;
+
+        if (totalScore > bestMultiScore) {
+          bestMultiScore = totalScore;
+          bestMultiPlans = currentPlans;
+        }
+      }
+    }
+
+    if (!bestMultiPlans || bestMultiPlans.length === 0) return null;
+
+    let totalPiecesPlaced = 0;
+    let totalUsedArea = 0;
+    let totalSheetArea = 0;
+    let totalWasteArea = 0;
+    let usableScrapArea = 0;
+
+    for (const plan of bestMultiPlans) {
+      totalPiecesPlaced += plan.placedPieces.length;
+      totalUsedArea += plan.usedAreaMm2;
+      totalSheetArea += plan.totalAreaMm2;
+      totalWasteArea += plan.wasteAreaMm2;
+      usableScrapArea += plan.usableScrapAreaMm2;
+    }
+
+    const yieldPercentage =
+      totalSheetArea > 0 ? Math.round((totalUsedArea / totalSheetArea) * 1000) / 10 : 0;
+
+    const totalMeters = bestMultiPlans.reduce((acc, p) => acc + p.length, 0) / 1000;
+    const distinctWidths = Array.from(new Set(bestMultiPlans.map((p) => p.width))).sort((a, b) => a - b);
+    const distinctWidthsCm = distinctWidths.map((w) => `${w / 10}cm`);
+
+    let maxLateralWasteMm = 0;
+    const wastes = bestMultiPlans.map((p) => {
+      const sideRemnant = p.remnants.find((r) => r.width > 0 && r.y > 0);
+      return sideRemnant ? sideRemnant.width : 0;
+    });
+    if (wastes.length > 0) {
+      maxLateralWasteMm = Math.max(...wastes);
+    }
+
+    const coilCutSuggestions = bestMultiPlans
+      .filter((p) => p.isCoilCut && p.coilCutLengthMm)
+      .map((p) => ({
+        coilId: p.sheetId,
+        coilName: p.sheetName,
+        width: p.width,
+        cutLengthMm: p.coilCutLengthMm || p.length,
+        piecesSummary: p.placedPieces.map((pl) => `${pl.pieceName} (${(pl.length / 1000).toFixed(2)}m)`).join(', '),
+      }));
+
+    // Se mais de uma largura de bobina foi utilizada, dá super bonificação para priorizar a solução mista
+    let score = yieldPercentage * 100;
+    score -= (totalWasteArea / 1_000_000) * 150;
+    score -= totalMeters * 10;
+    score += 25000; // Prioridade como Solução Mista Recomendada
+
+    return {
+      id: `sol_multi_coil_${Date.now()}`,
+      title: `🌀 Multi-Bobinas (${distinctWidthsCm.join(' + ')})`,
+      rank: 1,
+      priorityMode: 'max_yield',
+      score: Math.round(score),
+      yieldPercentage,
+      totalWasteAreaMm2: Math.round(totalWasteArea),
+      totalSheetsUsed: bestMultiPlans.length,
+      totalScrapsUsed: 0,
+      usableScrapsGenerated: bestMultiPlans.reduce((acc, p) => acc + p.remnants.filter((r) => r.isUsable).length, 0),
+      totalPiecesPlaced,
+      totalPiecesRequested: allPieces.length,
+      plans: bestMultiPlans,
+      unplacedPieces: [],
+      machineAlerts: [],
+      coilCutSuggestions,
+      primaryWidthMm: distinctWidths[0],
+      totalLengthCutMeters: Math.round(totalMeters * 100) / 100,
+      lateralWasteMm: maxLateralWasteMm,
+      stockCategory: 'rolo',
+      isFromUserStock: true,
+      summaryTag: `🌀 Multi-Bobina (${distinctWidthsCm.join(' + ')}) • Uso Misto Otimizado`,
+    };
   }
 
   /**
@@ -592,10 +782,26 @@ export class CutOptimizationService {
     const yieldPercentage =
       totalSheetArea > 0 ? Math.round((totalUsedArea / totalSheetArea) * 1000) / 10 : 0;
 
+    let maxLateralWasteMm = 0;
+    const wastes = bestPlanGroup.map((p) => {
+      const sideRemnant = p.remnants.find((r) => r.width > 0 && r.y > 0);
+      return sideRemnant ? sideRemnant.width : 0;
+    });
+    if (wastes.length > 0) {
+      maxLateralWasteMm = Math.max(...wastes);
+    }
+
     let score = yieldPercentage * 100;
-    score -= (totalWasteArea / 1_000_000) * 150;
+    score -= (totalWasteArea / 1_000_000) * 180;
     const totalMeters = bestPlanGroup.reduce((acc, p) => acc + p.length, 0) / 1000;
     score -= totalMeters * 15;
+
+    // Penalização forte para sobras laterais volumosas quando se escolhe uma bobina muito mais larga que o necessário
+    if (maxLateralWasteMm > 100) {
+      score -= (maxLateralWasteMm - 100) * 6;
+    } else if (maxLateralWasteMm <= 50) {
+      score += 200; // Bonificação para bobina com encaixe quase perfeito
+    }
 
     const coilCutSuggestions = bestPlanGroup
       .filter((p) => p.isCoilCut && p.coilCutLengthMm)
@@ -615,7 +821,7 @@ export class CutOptimizationService {
       score: Math.round(score),
       yieldPercentage,
       totalWasteAreaMm2: Math.round(totalWasteArea),
-      totalSheetsUsed: 1,
+      totalSheetsUsed: bestPlanGroup.length,
       totalScrapsUsed: 0,
       usableScrapsGenerated: bestPlanGroup.reduce((acc, p) => acc + p.remnants.filter((r) => r.isUsable).length, 0),
       totalPiecesPlaced,
@@ -624,6 +830,8 @@ export class CutOptimizationService {
       unplacedPieces: [],
       machineAlerts: [],
       coilCutSuggestions,
+      primaryWidthMm: coilStock.width,
+      lateralWasteMm: maxLateralWasteMm,
       stockCategory: coilStock.stockCategory || (coilStock.isFromUserStock ? 'rolo' : 'sugestao_compra'),
       isFromUserStock: coilStock.isFromUserStock,
     };
@@ -1292,6 +1500,33 @@ export class CutOptimizationService {
     }
 
     return score;
+  }
+
+  /**
+   * Recalcula o plano de corte de uma chapa transferindo as peças colocadas para uma bobina ou chapa escolhida manualmente.
+   */
+  public static repackPiecesOnStockCandidate(
+    pieces: PlacedPiece[],
+    stock: StockCandidate,
+    settings: MachineSettings
+  ): SheetCutPlan | null {
+    const expandedPieces: ExpandedPiece[] = pieces.map((p, idx) => ({
+      instanceId: p.pieceId || `piece_${idx}`,
+      pieceId: p.pieceId || `piece_${idx}`,
+      name: p.pieceName,
+      type: p.pieceType || 'outro',
+      devStart: p.devStart,
+      devEnd: p.devEnd || p.devStart,
+      length: p.length,
+      material: 'Galvanizado',
+      thickness: '0.50mm',
+      isTrapezoid: p.isTrapezoid || false,
+      areaMm2: GeometryService.calculatePieceAreaMm2(p),
+      maxWidth: Math.max(p.devStart, p.devEnd || p.devStart),
+      minWidth: Math.min(p.devStart, p.devEnd || p.devStart),
+    }));
+
+    return this.packSingleCoilSheet(stock, expandedPieces, settings);
   }
 
   private static sortPiecesForPacking(

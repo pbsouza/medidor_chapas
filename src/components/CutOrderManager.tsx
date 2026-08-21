@@ -120,6 +120,7 @@ export const CutOrderManager: React.FC<Props> = ({
   const [isCalculating, setIsCalculating] = useState(false);
   const [aiResult, setAiResult] = useState<AiOptimizationResult | null>(null);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
+  const [isExpandedMode, setIsExpandedMode] = useState(false);
 
   // Sincronização em tempo real das ordens salvas
   useEffect(() => {
@@ -653,6 +654,20 @@ export const CutOrderManager: React.FC<Props> = ({
             <span>Salvar Plano (Continuar Depois)</span>
           </button>
 
+          {/* Botão de Modo Amplo / Foco em Diagramas para telas grandes */}
+          <button
+            type="button"
+            onClick={() => setIsExpandedMode(!isExpandedMode)}
+            className={`px-3 py-2 border rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 active:scale-95 cursor-pointer ${
+              isExpandedMode
+                ? 'bg-blue-600 text-white border-blue-700'
+                : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+            }`}
+            title="Alternar entre modo dividido e modo expandido panorâmico de visualização dos cortes"
+          >
+            <span>{isExpandedMode ? '⛶ Modo Amplo Ativo' : '⛶ Expandir Diagramas'}</span>
+          </button>
+
           {selectedSolution && (
             <div className="flex items-center gap-3 bg-white border border-slate-200 px-3.5 py-1.5 rounded-xl shadow-sm ml-1">
               <div className="text-right">
@@ -673,10 +688,27 @@ export const CutOrderManager: React.FC<Props> = ({
         </div>
       </header>
 
+      {/* Barra de Notificação quando o Modo Expandido estiver ativo */}
+      {isExpandedMode && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-900 px-4 py-2.5 rounded-xl flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2">
+            <span className="font-bold">🖥️ Modo Panorâmico Ativo:</span>
+            <span>Os diagramas de corte e bobinas estão ocupando a largura total da tela para máxima legibilidade.</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsExpandedMode(false)}
+            className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition-colors cursor-pointer"
+          >
+            Exibir Painel de Peças
+          </button>
+        </div>
+      )}
+
       {/* Grid Principal: Painel Esquerdo (Peças/Entrada) e Painel Direito (Diagramas de Corte) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <div className={`grid grid-cols-1 ${isExpandedMode ? 'xl:grid-cols-1' : 'xl:grid-cols-12 2xl:grid-cols-12'} gap-6 items-start`}>
         {/* Coluna Esquerda: Peças da Ordem & Cadastro */}
-        <div className="lg:col-span-5 space-y-6">
+        <div className={`${isExpandedMode ? 'hidden' : 'xl:col-span-5 2xl:col-span-4'} space-y-6`}>
           {/* Card de Identificação da Ordem */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm space-y-3">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
@@ -1293,7 +1325,7 @@ export const CutOrderManager: React.FC<Props> = ({
         </div>
 
         {/* Coluna Direita: Resultados & Diagramas Visuais 2D */}
-        <div className="lg:col-span-7 space-y-6">
+        <div className={`${isExpandedMode ? 'col-span-1 xl:col-span-12' : 'xl:col-span-7 2xl:col-span-8'} space-y-6 min-w-0`}>
           {/* Card de Diagnóstico Inteligente com IA Gemini */}
           {aiResult && aiResult.success && (
             <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-blue-950 text-white rounded-2xl p-5 shadow-xl border border-indigo-500/30 space-y-4">
@@ -1365,11 +1397,15 @@ export const CutOrderManager: React.FC<Props> = ({
                   </span>
                 </div>
 
-                {/* Seletor das Soluções Calculadas */}
-                <div className={`grid grid-cols-1 sm:grid-cols-2 ${solutions.length >= 4 ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-3`}>
+                {/* Seletor das Soluções Calculadas com Grid Adaptativo e Altamente Responsivo */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 2xl:grid-cols-4 gap-3.5">
                   {solutions.map((sol, sIdx) => {
                     const isSelected = selectedSolutionIndex === sIdx;
-                    const primaryWidth = sol.primaryWidthMm
+                    const distinctCoils = Array.from(new Set(sol.plans.filter((p) => p.isCoilCut).map((p) => `${p.width / 10}cm`)));
+                    const isMultiCoil = distinctCoils.length > 1;
+                    const primaryWidth = isMultiCoil
+                      ? distinctCoils.join(' + ')
+                      : sol.primaryWidthMm
                       ? `${sol.primaryWidthMm / 10} cm`
                       : `${sol.plans[0]?.width / 10} cm`;
                     const meters = sol.totalLengthCutMeters || Math.round((sol.plans.reduce((acc, p) => acc + p.length, 0) / 1000) * 100) / 100;
@@ -1380,7 +1416,6 @@ export const CutOrderManager: React.FC<Props> = ({
                     const isScrap = sol.stockCategory === 'retalho' || sol.totalScrapsUsed > 0;
                     const isFlatSheet = sol.stockCategory === 'chapa' || (sol.totalSheetsUsed > 0 && !sol.primaryWidthMm);
                     const isUserCoil = sol.stockCategory === 'rolo' || (sol.isFromUserStock && !isScrap && !isFlatSheet);
-                    const isBuySuggestion = sol.stockCategory === 'sugestao_compra' || (!sol.isFromUserStock && !isScrap);
 
                     return (
                       <div
@@ -1397,6 +1432,8 @@ export const CutOrderManager: React.FC<Props> = ({
                             <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded whitespace-nowrap inline-flex items-center ${
                               isScrap
                                 ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                                : isMultiCoil
+                                ? 'bg-teal-100 text-teal-900 border border-teal-300 font-bold'
                                 : isUserCoil
                                 ? 'bg-indigo-100 text-indigo-900 border border-indigo-300'
                                 : isFlatSheet
@@ -1405,6 +1442,8 @@ export const CutOrderManager: React.FC<Props> = ({
                             }`}>
                               {isScrap
                                 ? '♻️ Retalhos'
+                                : isMultiCoil
+                                ? '🌀 Multi-Bobinas'
                                 : isUserCoil
                                 ? '🌀 Rolo Estoque'
                                 : isFlatSheet
@@ -1419,12 +1458,14 @@ export const CutOrderManager: React.FC<Props> = ({
                               ? `${sol.totalScrapsUsed} Retalho(s) Usado(s)`
                               : isFlatSheet
                               ? `${sol.totalSheetsUsed} Chapa(s) Plana(s)`
+                              : isMultiCoil
+                              ? `Bobinas ${primaryWidth}`
                               : `Bobina ${primaryWidth}`}
                           </div>
 
                           <div className="text-[11px] text-slate-600 font-mono mt-1.5 space-y-1">
                             {!isFlatSheet && (
-                              <div className="whitespace-nowrap">Desenrolar: <strong className="text-slate-900 font-bold">{meters.toFixed(2)}m</strong></div>
+                              <div className="whitespace-nowrap">Desenrolar total: <strong className="text-slate-900 font-bold">{meters.toFixed(2)}m</strong></div>
                             )}
                             <div className="whitespace-nowrap">Sobra lateral: <strong className="text-amber-800 font-bold">{wasteCm}</strong></div>
                             {sol.plans.length > 1 && (
@@ -1581,6 +1622,9 @@ export const CutOrderManager: React.FC<Props> = ({
                     key={`plan-${plan.sheetId}-${pIdx}`}
                     plan={plan}
                     index={pIdx}
+                    availableSheets={sheets}
+                    availableScraps={scraps}
+                    machineSettings={settings}
                     onUpdatePlan={(updatedPlan) => handlePlanUpdated(pIdx, updatedPlan)}
                   />
                 ))}

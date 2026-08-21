@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { SheetCutPlan, PlacedPiece, RemnantArea } from '../types';
+import { SheetCutPlan, PlacedPiece, RemnantArea, SheetItem, ScrapItem, MachineSettings } from '../types';
 import { GeometryService } from '../services/GeometryService';
+import { CutOptimizationService, StockCandidate, STANDARD_COMMERCIAL_WIDTHS } from '../services/CutOptimizationService';
 import {
   Scissors,
   Layers,
@@ -19,11 +20,16 @@ import {
   Maximize2,
   Minimize2,
   Compass,
+  ChevronDown,
+  Sparkles,
 } from 'lucide-react';
 
 interface Props {
   plan: SheetCutPlan;
   index: number;
+  availableSheets?: SheetItem[];
+  availableScraps?: ScrapItem[];
+  machineSettings?: MachineSettings;
   onUpdatePlan?: (updatedPlan: SheetCutPlan) => void;
 }
 
@@ -37,10 +43,37 @@ const PIECE_COLORS = [
   { fill: 'rgba(6, 182, 212, 0.25)', stroke: '#0891b2', text: '#164e63', name: 'Ciano' },
 ];
 
-export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan }) => {
+const DEFAULT_MACHINE_SETTINGS: MachineSettings = {
+  maxCutLength: 7000,
+  spliceOverlapLength: 100,
+  autoSplitLongPieces: true,
+  allowCoilCustomCut: true,
+  supportCoilRolls: true,
+  kerf: 0,
+  safetyMargin: 0,
+  minSpacing: 0,
+  scrapMinLength: 400,
+  scrapMinWidth: 150,
+  defaultPriority: 'max_yield',
+  defaultUnit: 'mm',
+  preferredWidth: 0,
+  prioritizeMostInStock: true,
+};
+
+export const VisualCutDiagram: React.FC<Props> = ({
+  plan,
+  index,
+  availableSheets = [],
+  availableScraps = [],
+  machineSettings = DEFAULT_MACHINE_SETTINGS,
+  onUpdatePlan,
+}) => {
   // Estado local do plano para permitir ajustes manuais interativos
   const [currentPlan, setCurrentPlan] = useState<SheetCutPlan>(plan);
   const [originalPlan] = useState<SheetCutPlan>(JSON.parse(JSON.stringify(plan)));
+
+  // Modal / Dropdown de troca de bobina
+  const [showCoilSelector, setShowCoilSelector] = useState<boolean>(false);
 
   // Atualiza se o prop mudar externamente (ex: novo cálculo)
   useEffect(() => {
@@ -62,6 +95,74 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
   useEffect(() => {
     setManualSheetLengthInput(String(currentPlan.length));
   }, [currentPlan.length]);
+
+  // Lista de Bobinas do Estoque do Usuário + Opções Comerciais Padrão
+  const userStockCoils = availableSheets.filter((s) => s.isCoil || s.length >= 20000);
+  const distinctStockWidths = Array.from(new Set(userStockCoils.map((s) => s.width))).sort((a, b) => a - b);
+
+  // Manipulador de Troca de Bobina
+  const handleSelectCoilWidth = (targetWidthMm: number, stockItem?: SheetItem) => {
+    setShowCoilSelector(false);
+
+    const maxPieceWidth = Math.max(
+      ...currentPlan.placedPieces.map((p) => Math.max(p.devStart, p.devEnd || p.devStart))
+    );
+
+    if (maxPieceWidth > targetWidthMm) {
+      alert(
+        `Atenção: A maior peça desta folha requer ${maxPieceWidth} mm (${maxPieceWidth / 10} cm) de largura. A bobina de ${targetWidthMm / 10} cm não suporta essa largura sem cortar a peça.`
+      );
+      return;
+    }
+
+    const targetStockCandidate: StockCandidate = stockItem
+      ? {
+          id: stockItem.id,
+          code: `ROLO-${stockItem.width}`,
+          name: stockItem.name || `Bobina ${stockItem.width}mm (${stockItem.width / 10}cm)`,
+          isScrap: false,
+          width: stockItem.width,
+          length: stockItem.length || 50000,
+          material: stockItem.material || currentPlan.material,
+          thickness: stockItem.thickness || currentPlan.thickness,
+          availableQty: stockItem.quantity || 1,
+          isCoil: true,
+          coilRemainingLength: stockItem.coilRemainingLength || stockItem.length || 50000,
+          isFromUserStock: true,
+          stockCategory: 'rolo',
+        }
+      : {
+          id: `custom_coil_${targetWidthMm}`,
+          code: `ROLO-${targetWidthMm}`,
+          name: `Bobina ${targetWidthMm} mm (${targetWidthMm / 10} cm)`,
+          isScrap: false,
+          width: targetWidthMm,
+          length: 50000,
+          material: currentPlan.material,
+          thickness: currentPlan.thickness,
+          availableQty: 1,
+          isCoil: true,
+          coilRemainingLength: 50000,
+          isFromUserStock: userStockCoils.some((c) => c.width === targetWidthMm),
+          stockCategory: userStockCoils.some((c) => c.width === targetWidthMm) ? 'rolo' : 'sugestao_compra',
+        };
+
+    const repackedPlan = CutOptimizationService.repackPiecesOnStockCandidate(
+      currentPlan.placedPieces,
+      targetStockCandidate,
+      machineSettings
+    );
+
+    if (repackedPlan) {
+      setCurrentPlan(repackedPlan);
+      if (onUpdatePlan) {
+        onUpdatePlan(repackedPlan);
+      }
+    } else {
+      // Fallback: altera a largura da chapa mantendo as posições
+      applyPiecesUpdate(currentPlan.placedPieces, undefined, targetWidthMm);
+    }
+  };
 
   // Estado de Arraste (Drag and Drop)
   const [draggingPieceId, setDraggingPieceId] = useState<string | null>(null);
@@ -439,13 +540,121 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               : '📋 CHAPA PLANA'}
           </span>
           <div className="min-w-0">
-            <h4 className="text-slate-900 font-black text-sm sm:text-base flex items-center gap-2 flex-wrap">
-              <span className="truncate">{currentPlan.sheetName}</span>
-              <span className="text-xs font-mono text-slate-500 font-normal whitespace-nowrap">
-                ({currentPlan.width} × {currentPlan.length} mm)
-              </span>
-            </h4>
-            <div className="text-xs text-slate-500 font-medium flex items-center flex-wrap gap-x-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h4 className="text-slate-900 font-black text-sm sm:text-base flex items-center gap-2 flex-wrap">
+                <span className="truncate">{currentPlan.sheetName}</span>
+                <span className="text-xs font-mono text-slate-500 font-normal whitespace-nowrap">
+                  ({currentPlan.width} × {currentPlan.length} mm)
+                </span>
+              </h4>
+
+              {/* BOTÃO PARA ESCOLHER OUTRA BOBINA / CHAPA DO ESTOQUE */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowCoilSelector(!showCoilSelector)}
+                  className="px-2.5 py-1 text-[11px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-300 rounded-lg flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer select-none"
+                  title="Trocar bobina desta folha por outra largura do estoque ou comercial (ex: 1,20m, 1,00m, 70cm)"
+                >
+                  <span>🌀 Escolher Bobina</span>
+                  <ChevronDown className="w-3 h-3 text-indigo-600" />
+                </button>
+
+                {/* Dropdown de Seleção de Bobina */}
+                {showCoilSelector && (
+                  <div className="absolute left-0 top-full mt-1.5 z-40 bg-white border-2 border-indigo-200 rounded-xl shadow-xl p-3 w-72 sm:w-80 text-xs space-y-3 animate-in fade-in zoom-in-95">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                      <span className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                        <span>🌀</span>
+                        <span>Escolher Bobina para Este Corte</span>
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowCoilSelector(false)}
+                        className="text-slate-400 hover:text-slate-700 text-sm font-bold px-1"
+                      >
+                        ✕
+                      </button>
+                    </div>
+
+                    {/* Bobinas Cadastradas no Estoque do Usuário */}
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-indigo-900 mb-1.5 flex items-center justify-between">
+                        <span>📦 Bobinas do Seu Estoque</span>
+                        <span className="text-[9px] text-slate-500 lowercase font-normal">disponíveis</span>
+                      </div>
+                      {userStockCoils.length > 0 ? (
+                        <div className="grid grid-cols-2 gap-1.5">
+                          {distinctStockWidths.map((w) => {
+                            const matching = userStockCoils.find((c) => c.width === w);
+                            const isCurrent = currentPlan.width === w;
+                            return (
+                              <button
+                                key={w}
+                                type="button"
+                                onClick={() => handleSelectCoilWidth(w, matching)}
+                                className={`p-2 rounded-lg border text-left flex flex-col transition-all cursor-pointer ${
+                                  isCurrent
+                                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                    : 'bg-indigo-50/70 hover:bg-indigo-100 text-indigo-950 border-indigo-200'
+                                }`}
+                              >
+                                <span className="font-bold font-mono text-xs">
+                                  {w / 10} cm ({w}mm)
+                                </span>
+                                <span className={`text-[10px] truncate ${isCurrent ? 'text-indigo-100' : 'text-slate-500'}`}>
+                                  {matching?.name || 'Bobina Estoque'}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded border border-slate-200">
+                          Nenhuma bobina cadastrada no estoque. Você pode escolher as larguras comerciais abaixo:
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Todas as Larguras Comerciais Padrão (30cm, 40cm, 50cm, 60cm, 70cm, 80cm, 90cm, 100cm, 120cm) */}
+                    <div>
+                      <div className="text-[10px] font-black uppercase tracking-wider text-slate-500 mb-1.5">
+                        📐 Outras Medidas Comerciais
+                      </div>
+                      <div className="grid grid-cols-3 gap-1">
+                        {STANDARD_COMMERCIAL_WIDTHS.map((stdW) => {
+                          const isCurrent = currentPlan.width === stdW;
+                          const inStock = distinctStockWidths.includes(stdW);
+                          return (
+                            <button
+                              key={stdW}
+                              type="button"
+                              onClick={() => handleSelectCoilWidth(stdW)}
+                              className={`px-2 py-1.5 rounded-lg border text-center font-mono font-bold text-xs transition-colors cursor-pointer ${
+                                isCurrent
+                                  ? 'bg-slate-900 text-white border-slate-900'
+                                  : inStock
+                                  ? 'bg-indigo-50/50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+                                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200'
+                              }`}
+                            >
+                              {stdW >= 1000 ? `${(stdW / 1000).toFixed(2).replace('.00', '')}m` : `${stdW / 10}cm`}
+                              {inStock && <span className="block text-[8px] font-sans text-indigo-600">Estoque</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 italic bg-slate-50 p-1.5 rounded border border-slate-100">
+                      💡 Ao escolher a bobina (ex: 1,20m), o sistema recalcula e remonta automaticamente as tiras e sobras aproveitáveis.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="text-xs text-slate-500 font-medium flex items-center flex-wrap gap-x-2 mt-0.5">
               <span className="whitespace-nowrap">Material: <strong className="text-slate-700">{currentPlan.material} ({currentPlan.thickness})</strong></span>
               <span className="whitespace-nowrap">• Peças: <strong className="text-slate-900">{currentPlan.placedPieces.length}</strong></span>
               {currentPlan.isCoilCut && (
@@ -484,11 +693,12 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
             <button
               onClick={() => setZoom(1)}
               className="px-1.5 py-0.5 text-[11px] font-mono font-bold text-slate-600 hover:text-slate-900"
+              title="Ajustar à Largura (100%)"
             >
               {Math.round(zoom * 100)}%
             </button>
             <button
-              onClick={() => setZoom((z) => Math.min(2.0, z + 0.15))}
+              onClick={() => setZoom((z) => Math.min(2.5, z + 0.15))}
               className="p-1.5 hover:bg-white text-slate-600 rounded transition-colors"
               title="Aumentar Zoom"
             >
@@ -832,20 +1042,21 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
       )}
 
       {/* Blueprint Canvas com Suporte a Rotação de Chapa & Drag and Drop Touch */}
-      <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 sm:p-4 overflow-x-auto select-none touch-pan-x touch-pan-y">
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 sm:p-4 overflow-x-auto select-none touch-pan-x touch-pan-y">
         <div
           className="transition-transform duration-200 origin-center mx-auto"
           style={{
-            width: `${svgWidth * zoom}px`,
+            width: zoom === 1 ? '100%' : `${Math.max(650, Math.round(1000 * zoom))}px`,
+            minWidth: zoom > 1 ? `${Math.round(900 * zoom)}px` : undefined,
             transform: `rotate(${sheetRotation}deg)`,
             transformOrigin: 'center center',
           }}
         >
           {/* Eixos Dimensionais */}
-          <div className="flex justify-between text-[11px] font-mono text-slate-400 font-bold uppercase pb-1.5 px-1 whitespace-nowrap">
+          <div className="flex justify-between text-[11px] sm:text-xs font-mono text-slate-500 font-bold uppercase pb-1.5 px-1 whitespace-nowrap">
             <span>0 mm</span>
-            <span className="text-slate-600 truncate px-2">
-              {isManualEditMode ? '✋ MODO AJUSTE ATIVO — Toque e arraste as peças ou use os botões direcionais' : `Eixo Longitudinal: ${currentPlan.length} mm ➔`}
+            <span className="text-slate-700 truncate px-2 font-black">
+              {isManualEditMode ? '✋ MODO AJUSTE ATIVO — Toque e arraste as peças ou use os botões direcionais' : `Eixo Longitudinal: ${currentPlan.length} mm (${(currentPlan.length / 1000).toFixed(2)}m) ➔`}
             </span>
             <span>{currentPlan.length} mm</span>
           </div>
@@ -865,8 +1076,8 @@ export const VisualCutDiagram: React.FC<Props> = ({ plan, index, onUpdatePlan })
               viewBox={`0 0 ${currentPlan.length} ${currentPlan.width}`}
               className="w-full h-auto block select-none touch-none"
               style={{
-                maxHeight: '450px',
-                minHeight: '150px',
+                maxHeight: 'min(75vh, 600px)',
+                minHeight: '160px',
                 cursor: isManualEditMode ? 'crosshair' : 'default',
                 touchAction: 'none',
               }}

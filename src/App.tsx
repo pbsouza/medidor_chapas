@@ -326,7 +326,7 @@ export default function App() {
         />
 
         {/* Conteúdo Principal */}
-        <main className="lg:pl-72 flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className="lg:pl-72 flex-1 p-3 sm:p-5 lg:p-6 xl:p-8 2xl:p-10 w-full min-w-0 max-w-[1920px] mx-auto">
           {activeTab === 'dashboard' && (
             <Dashboard
               sheets={sheets}
